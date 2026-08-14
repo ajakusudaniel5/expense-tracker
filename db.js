@@ -55,6 +55,10 @@ if (!seed) {
   insertCat.run('Health', 'expense', '💊');
   insertCat.run('Entertainment', 'expense', '🎬');
   insertCat.run('Salary', 'income', '💵');
+  insertCat.run('Business', 'income', '💼');
+  insertCat.run('Freelance', 'income', '🧑‍💻');
+  insertCat.run('Investments', 'income', '📈');
+  insertCat.run('Rental', 'income', '🏘️');
   insertCat.run('Other', 'expense', '📦');
   db.prepare('INSERT OR IGNORE INTO seed_marker (id) VALUES (1)').run();
 }
