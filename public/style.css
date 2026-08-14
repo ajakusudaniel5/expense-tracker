@@ -924,3 +924,45 @@ button[type="submit"]:active {
 }
 .settings-status.on { background: rgba(45, 212, 167, 0.15); color: var(--income); }
 .settings-status.off { background: rgba(255, 107, 122, 0.15); color: var(--expense); }
+
+.settings-card textarea {
+  width: 100%;
+  background: var(--bg-soft);
+  border: 1px solid var(--surface-border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: 'Consolas', 'Menlo', monospace;
+  resize: vertical;
+  outline: none;
+}
+.settings-card textarea:focus { border-color: var(--accent); }
+
+.imp-mapping { margin-top: 8px; }
+.imp-mapping h4 { margin-bottom: 10px; font-size: 15px; }
+.imp-field { margin-bottom: 10px; }
+.imp-field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+.imp-field select {
+  width: 100%;
+  background: var(--bg-soft);
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 14px;
+  outline: none;
+}
+.imp-field select:focus { border-color: var(--accent); }
+.imp-field em { font-style: normal; color: var(--muted); }
+
+.imp-preview { margin: 10px 0; overflow-x: auto; }
+.imp-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.imp-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--surface-border);
+  color: var(--muted);
+  font-weight: 600;
+}
+.imp-table td { padding: 6px 8px; border-bottom: 1px solid var(--surface-border); }

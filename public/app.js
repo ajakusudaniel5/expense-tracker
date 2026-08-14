@@ -816,6 +816,172 @@ async function loadSettingsPage() {
     });
   }
   container.appendChild(card);
+  container.appendChild(renderImportCard());
+}
+
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else if (c === '\r') { /* skip */ }
+      else field += c;
+    }
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows.filter((r) => r.some((c) => c.trim() !== ''));
+}
+
+function guessAmount(str) {
+  if (str == null) return null;
+  let s = String(str).trim();
+  if (!s) return null;
+  const neg = s.startsWith('-') || /\(\s*/.test(s);
+  s = s.replace(/[^\d.-]/g, '');
+  if (!s || !/\d/.test(s)) return null;
+  const n = parseFloat(s);
+  if (isNaN(n)) return null;
+  return neg ? -Math.abs(n) : n;
+}
+
+function normalizeDate(str) {
+  if (str == null) return null;
+  let s = String(str).trim();
+  if (!s) return null;
+  let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  const t = new Date(s);
+  if (!isNaN(t.getTime())) return t.toISOString().slice(0, 10);
+  return null;
+}
+
+function renderImportCard() {
+  const card = document.createElement('div');
+  card.className = 'settings-card';
+  card.style.maxWidth = '640px';
+  card.innerHTML = `
+    <h3>Import from CSV</h3>
+    <p class="muted">Upload a CSV (e.g. converted from your MTN MoMo statement) or paste its text, then map the columns.</p>
+    <div class="field">
+      <label for="imp-file">Upload CSV file</label>
+      <input type="file" id="imp-file" accept=".csv,text/csv">
+    </div>
+    <div class="field">
+      <label for="imp-text">Or paste CSV text</label>
+      <textarea id="imp-text" rows="6" placeholder="date,description,amount"></textarea>
+    </div>
+    <button type="button" id="imp-parse" class="btn-primary">Parse</button>
+    <div id="imp-result"></div>
+  `;
+  card.querySelector('#imp-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { card.querySelector('#imp-text').value = reader.result; };
+    reader.readAsText(file);
+  });
+  card.querySelector('#imp-parse').addEventListener('click', () => {
+    const text = card.querySelector('#imp-text').value;
+    const result = card.querySelector('#imp-result');
+    const rows = parseCSV(text);
+    if (rows.length < 1) {
+      result.innerHTML = '<p class="error">No rows found in the pasted text.</p>';
+      return;
+    }
+    buildMappingUI(result, rows);
+  });
+  return card;
+}
+
+function buildMappingUI(container, rows) {
+  const header = rows[0];
+  const data = rows.slice(1).slice(0, 50);
+  const opts = header.map((h, i) => `<option value="${i}">${escapeHtml(h) || `Column ${i + 1}`}</option>`).join('');
+  const emptyOpt = '<option value="">— none —</option>';
+  const total = rows.length - 1;
+  container.innerHTML = `
+    <div class="imp-mapping">
+      <h4>Map columns (${total} data rows found)</h4>
+      <div class="imp-field"><label>Date column</label><select id="m-date">${emptyOpt}${opts}</select></div>
+      <div class="imp-field"><label>Amount column</label><select id="m-amount">${emptyOpt}${opts}</select></div>
+      <div class="imp-field"><label>Description/Note column</label><select id="m-note">${emptyOpt}${opts}</select></div>
+      <div class="imp-field"><label>Type column <em>(optional)</em></label><select id="m-type">${emptyOpt}${opts}</select></div>
+      <div class="imp-preview"></div>
+      <div class="btn-row"><button type="button" id="m-run" class="btn-primary">Import rows</button><span id="m-msg" class="muted"></span></div>
+    </div>
+  `;
+  const selIds = ['m-date', 'm-amount', 'm-note', 'm-type'];
+  selIds.forEach((id) => container.querySelector('#' + id).addEventListener('change', renderPreview));
+  function currentMap() {
+    const get = (id) => { const v = container.querySelector('#' + id).value; return v === '' ? null : Number(v); };
+    return { date: get('m-date'), amount: get('m-amount'), note: get('m-note'), type: get('m-type') };
+  }
+  function renderPreview() {
+    const map = currentMap();
+    const preview = container.querySelector('.imp-preview');
+    if (map.date == null || map.amount == null) {
+      preview.innerHTML = '<p class="muted">Select at least a date and amount column.</p>';
+      return;
+    }
+    const sample = data.slice(0, 5).map((r) => {
+      const amt = guessAmount(r[map.amount]);
+      const dt = normalizeDate(r[map.date]);
+      const note = map.note != null ? r[map.note] : '';
+      const type = map.type != null ? r[map.type] : '';
+      return { amt, dt, note, type };
+    });
+    preview.innerHTML = '<table class="imp-table"><tr><th>Date</th><th>Amount</th><th>Type</th><th>Note</th></tr>' +
+      sample.map((s) => `<tr><td>${escapeHtml(s.dt) || '—'}</td><td>${s.amt == null ? '—' : escapeHtml(String(s.amt))}</td><td>${escapeHtml(s.type) || 'auto'}</td><td>${escapeHtml(s.note) || '—'}</td></tr>`).join('') +
+      '</table>';
+  }
+  function typeOf(t) {
+    if (t == null) return '';
+    const s = String(t).toLowerCase();
+    if (/expense|debit|withdraw|sent|payment|purchase|cash out|-/.test(s)) return 'expense';
+    if (/income|credit|deposit|receive|received|cash in|refund|\+/.test(s)) return 'income';
+    return '';
+  }
+  container.querySelector('#m-run').addEventListener('click', async () => {
+    const map = currentMap();
+    if (map.date == null || map.amount == null) return alert('Select date and amount columns');
+    const out = [];
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const amt = guessAmount(r[map.amount]);
+      const dt = normalizeDate(r[map.date]);
+      if (amt == null || dt == null) continue;
+      const amtAbs = Math.abs(amt);
+      let type = typeOf(map.type != null ? r[map.type] : '');
+      if (!type) type = amt < 0 ? 'expense' : 'income';
+      out.push({ amount: amtAbs, date: dt, type, note: map.note != null ? r[map.note] : null });
+    }
+    if (!out.length) { alert('No valid rows to import'); return; }
+    const msg = container.querySelector('#m-msg');
+    msg.textContent = 'Importing...';
+    try {
+      const res = await api('/api/transactions/import', { method: 'POST', body: JSON.stringify({ rows: out }) });
+      msg.textContent = '';
+      alert(`Imported ${res.inserted} transactions (${res.skipped} skipped).`);
+      container.innerHTML = '<p class="muted">Done. You can import another file.</p>';
+    } catch (err) {
+      msg.textContent = '';
+      alert(err.message);
+    }
+  });
+  renderPreview();
 }
 
 

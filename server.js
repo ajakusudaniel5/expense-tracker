@@ -236,6 +236,36 @@ app.post('/api/transactions', requireAuth, (req, res) => {
   });
 });
 
+app.post('/api/transactions/import', requireAuth, (req, res) => {
+  const { rows } = req.body;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: 'rows array is required' });
+  }
+  if (rows.length > 5000) {
+    return res.status(400).json({ error: 'too many rows (max 5000)' });
+  }
+  const insert = db.prepare(
+    'INSERT INTO transactions (amount, date, type, category_id, note) VALUES (?, ?, ?, ?, ?)'
+  );
+  let inserted = 0;
+  for (const r of rows) {
+    const amount = r.amount;
+    const date = r.date;
+    const type = r.type;
+    if (typeof amount !== 'number' || amount <= 0) continue;
+    if (typeof type !== 'string' || !['income', 'expense'].includes(type)) continue;
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    const catId = r.category_id != null ? Number(r.category_id) : null;
+    if (catId != null) {
+      const cat = db.prepare('SELECT id FROM categories WHERE id = ?').get(catId);
+      if (!cat) continue;
+    }
+    insert.run(amount, date, type, catId, r.note != null ? String(r.note) : null);
+    inserted++;
+  }
+  res.status(201).json({ inserted, skipped: rows.length - inserted });
+});
+
 app.put('/api/transactions/:id', requireAuth, (req, res) => {
   const { amount, date, type, category_id, note } = req.body;
   const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
