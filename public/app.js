@@ -253,6 +253,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
   if (name === 'budgets') loadBudgets();
   if (name === 'categories') loadCategoriesPage();
+  if (name === 'reports') loadReports();
 }
 
 let lastAlertKey = '';
@@ -414,6 +415,220 @@ async function deleteCategory(c) {
   } catch (err) {
     alert(err.message);
   }
+}
+
+async function loadReports() {
+  const container = $('#reports');
+  container.innerHTML = '<div class="empty">Loading...</div>';
+
+  const allTx = await api('/api/transactions');
+  container.innerHTML = '';
+
+  if (!allTx.length) {
+    container.innerHTML = '<div class="empty">No data yet. Add some transactions to see insights.</div>';
+    return;
+  }
+
+  const { monthly, byCategory } = summarize(allTx);
+
+  container.appendChild(renderTrend(monthly));
+  container.appendChild(renderTopCategories(byCategory));
+  container.appendChild(renderDonut(byCategory));
+  container.appendChild(renderInsights(allTx));}
+
+function summarize(allTx) {
+  const monthly = {};
+  const byCategory = {};
+  for (const t of allTx) {
+    const m = t.date.slice(0, 7);
+    if (!monthly[m]) monthly[m] = { income: 0, expense: 0 };
+    if (t.type === 'income') monthly[m].income += t.amount;
+    else monthly[m].expense += t.amount;
+    if (t.type === 'expense') {
+      const key = t.category_id ? t.category_id : 0;
+      if (!byCategory[key]) {
+        byCategory[key] = { name: t.category_name || 'Uncategorized', icon: t.category_icon || '💸', amount: 0 };
+      }
+      byCategory[key].amount += t.amount;
+    }
+  }
+  const sortedMonths = Object.keys(monthly).sort();
+  const sortedCats = Object.values(byCategory).sort((a, b) => b.amount - a.amount);
+  return { monthly, byCategory, sortedMonths: sortedMonths, sortedCats };
+}
+
+function renderTrend(monthly) {
+  const months = Object.keys(monthly).sort();
+  const section = document.createElement('div');
+  section.className = 'report-card';
+  const title = document.createElement('h3');
+  title.textContent = 'Monthly Income vs Expenses';
+  section.appendChild(title);
+
+  const max = Math.max(
+    1,
+    ...months.map((m) => Math.max(monthly[m].income, monthly[m].expense))
+  );
+  const chart = document.createElement('div');
+  chart.className = 'trend-chart';
+  for (const m of months) {
+    const col = document.createElement('div');
+    col.className = 'trend-col';
+    const label = document.createElement('div');
+    label.className = 'trend-label';
+    label.textContent = m;
+    const bars = document.createElement('div');
+    bars.className = 'trend-bars';
+    const inc = document.createElement('div');
+    inc.className = 'trend-bar income';
+    inc.style.height = `${Math.round((monthly[m].income / max) * 100)}%`;
+    inc.title = `Income ${money(monthly[m].income)}`;
+    const exp = document.createElement('div');
+    exp.className = 'trend-bar expense';
+    exp.style.height = `${Math.round((monthly[m].expense / max) * 100)}%`;
+    exp.title = `Expenses ${money(monthly[m].expense)}`;
+    bars.appendChild(inc);
+    bars.appendChild(exp);
+    col.appendChild(bars);
+    col.appendChild(label);
+    chart.appendChild(col);
+  }
+  section.appendChild(chart);
+
+  const legend = document.createElement('div');
+  legend.className = 'legend';
+  legend.innerHTML = '<span class="legend-item"><span class="dot income-dot"></span> Income</span><span class="legend-item"><span class="dot expense-dot"></span> Expenses</span>';
+  section.appendChild(legend);
+  return section;
+}
+
+function renderTopCategories(byCategory) {
+  const section = document.createElement('div');
+  section.className = 'report-card';
+  const title = document.createElement('h3');
+  title.textContent = 'Top Spending Categories';
+  section.appendChild(title);
+
+  const withIds = Object.entries(byCategory).sort((a, b) => b[1].amount - a[1].amount);
+  if (!withIds.length) {
+    section.appendChild(document.createElement('div')).className = 'empty';
+    section.lastChild.textContent = 'No expenses yet.';
+    return section;
+  }
+
+  const total = withIds.reduce((sum, [, c]) => sum + c.amount, 0);
+  const top = withIds.slice(0, 5);
+  for (const [id, c] of top) {
+    const row = document.createElement('div');
+    row.className = 'cat-bar-row';
+    const pct = Math.round((c.amount / total) * 100);
+    const color = catColor(id);
+    row.innerHTML = `
+      <span class="cat-bar-icon">${escapeHtml(c.icon)}</span>
+      <span class="cat-bar-name">${escapeHtml(c.name)}</span>
+      <div class="cat-bar-track"><div class="cat-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+      <span class="cat-bar-pct">${pct}%</span>
+      <span class="cat-bar-amount">${money(c.amount)}</span>
+    `;
+    section.appendChild(row);
+  }
+  return section;
+}
+
+function renderDonut(byCategory) {
+  const section = document.createElement('div');
+  section.className = 'report-card';
+  const title = document.createElement('h3');
+  title.textContent = 'Spending Breakdown';
+  section.appendChild(title);
+
+  const withIds = Object.entries(byCategory).sort((a, b) => b[1].amount - a[1].amount);
+  if (!withIds.length) {
+    section.appendChild(document.createElement('div')).className = 'empty';
+    section.lastChild.textContent = 'No expenses yet.';
+    return section;
+  }
+
+  const total = withIds.reduce((sum, [, c]) => sum + c.amount, 0);
+  const donut = document.createElement('div');
+  donut.className = 'donut';
+  donut.style.background = conicGradient(withIds);
+  donut.innerHTML = `<div class="donut-hole"><strong>${money(total)}</strong><small>Total spent</small></div>`;
+
+  const legend = document.createElement('div');
+  legend.className = 'donut-legend';
+  for (const [id, c] of withIds) {
+    const item = document.createElement('div');
+    item.className = 'donut-legend-item';
+    item.innerHTML = `<span class="dot" style="background:${catColor(id)}"></span> ${escapeHtml(c.name)} <em>${money(c.amount)}</em>`;
+    legend.appendChild(item);
+  }
+
+  section.appendChild(donut);
+  section.appendChild(legend);
+  return section;
+}
+
+function renderInsights(allTx) {
+  const section = document.createElement('div');
+  section.className = 'report-card';
+  const title = document.createElement('h3');
+  title.textContent = 'Insights';
+  section.appendChild(title);
+
+  const list = document.createElement('ul');
+  list.className = 'insight-list';
+  const months = {};
+  for (const t of allTx) {
+    const m = t.date.slice(0, 7);
+    if (!months[m]) months[m] = { income: 0, expense: 0 };
+    if (t.type === 'income') months[m].income += t.amount;
+    else months[m].expense += t.amount;
+  }
+  const monthKeys = Object.keys(months).sort();
+  const latest = months[monthKeys[monthKeys.length - 1]];
+
+  const li = (text) => {
+    const el = document.createElement('li');
+    el.textContent = text;
+    list.appendChild(el);
+  };
+
+  const totalIncome = allTx.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
+  const totalExpense = allTx.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+
+  li(`Total income: ${money(totalIncome)}`);
+  li(`Total expenses: ${money(totalExpense)}`);
+  li(`Net savings: ${money(totalIncome - totalExpense)}`);
+
+  const rate = totalIncome > 0 ? Math.round((totalExpense / totalIncome) * 100) : 0;
+  if (rate > 100) li(`⚠️ You're spending ${rate - 100}% more than you earn.`);
+  else li(`You're saving ${100 - rate}% of your income.`);
+
+  if (monthKeys.length > 1) {
+    const prev = months[monthKeys[monthKeys.length - 2]];
+    const delta = prev.expense > 0 ? Math.round(((latest.expense - prev.expense) / prev.expense) * 100) : null;
+    if (delta !== null) {
+      if (delta > 0) li(`📈 Spending up ${delta}% vs previous month.`);
+      else li(`📉 Spending down ${Math.abs(delta)}% vs previous month.`);
+    }
+  }
+
+  section.appendChild(list);
+  return section;
+}
+
+function conicGradient(withIds) {
+  const total = withIds.reduce((sum, [, c]) => sum + c.amount, 0);
+  if (!total) return '';
+  let acc = 0;
+  const parts = withIds.map(([id, c]) => {
+    const from = (acc / total) * 360;
+    acc += c.amount;
+    const to = (acc / total) * 360;
+    return `${catColor(id)} ${from}deg ${to}deg`;
+  });
+  return `conic-gradient(${parts.join(', ')})`;
 }
 
 function wireSteppers(root = document) {
