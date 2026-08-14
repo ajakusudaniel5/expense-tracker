@@ -50,6 +50,37 @@ app.delete('/api/categories/:id', (req, res) => {
   res.status(204).end();
 });
 
+app.put('/api/categories/:id', (req, res) => {
+  const { name, type, icon } = req.body;
+  const existing = db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  const updated = {
+    name: name !== undefined ? name : existing.name,
+    type: type !== undefined ? type : existing.type,
+    icon: icon !== undefined ? icon : existing.icon,
+  };
+  if (!updated.name) {
+    return res.status(400).json({ error: 'name cannot be empty' });
+  }
+  if (!['income', 'expense'].includes(updated.type)) {
+    return res.status(400).json({ error: 'type must be income or expense' });
+  }
+  try {
+    db.prepare('UPDATE categories SET name = ?, type = ?, icon = ? WHERE id = ?').run(
+      updated.name,
+      updated.type,
+      updated.icon || null,
+      req.params.id
+    );
+    res.json({ id: Number(req.params.id), ...updated, icon: updated.icon || null });
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) {
+      return res.status(409).json({ error: 'category already exists' });
+    }
+    throw err;
+  }
+});
+
 app.get('/api/transactions', (req, res) => {
   const { month } = req.query;
   let sql =

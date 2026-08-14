@@ -599,3 +599,68 @@ button[type="submit"]:active {
   background: #2a1420;
   border-color: #3a1e2e;
 }
+
+.category-group {
+  margin-top: 20px;
+}
+
+.category-group h3 {
+  font-size: 14px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 12px;
+}
+
+.category-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--bg-soft);
+  border: 1px solid var(--surface-border);
+  border-radius: 12px;
+  margin-bottom: 8px;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.category-card:hover {
+  background: var(--surface);
+  transform: translateX(4px);
+}
+
+.cat-icon {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.cat-name {
+  flex: 1;
+  font-weight: 600;
+  color: #fff;
+}
+
+.cat-edit, .cat-delete {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.cat-edit:hover, .cat-delete:hover {
+  opacity: 1;
+  transform: scale(1.15);
+}
+
+.cat-delete { color: var(--expense); }
+.cat-edit { color: var(--muted); }

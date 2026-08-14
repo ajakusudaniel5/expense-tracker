@@ -252,6 +252,7 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
   if (name === 'budgets') loadBudgets();
+  if (name === 'categories') loadCategoriesPage();
 }
 
 let lastAlertKey = '';
@@ -295,6 +296,124 @@ async function checkAlertsForAdded() {
     }
   }
   computeBudgetAlerts(budgets, spent).forEach((a) => showAlert(a.msg, a.type));
+}
+
+async function loadCategoriesPage() {
+  const cats = await api('/api/categories');
+  const container = $('#categories');
+  container.innerHTML = '';
+
+  const form = document.createElement('div');
+  form.className = 'budget-form';
+  form.innerHTML = `
+    <div class="field">
+      <label for="c-name">Name</label>
+      <input type="text" id="c-name" placeholder="e.g. Shopping" required>
+    </div>
+    <div class="field">
+      <label for="c-type">Type</label>
+      <select id="c-type">
+        <option value="expense">Expense</option>
+        <option value="income">Income</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="c-icon">Icon</label>
+      <input type="text" id="c-icon" maxlength="4" placeholder="🛍️">
+    </div>
+    <button id="c-add" type="button">Add Category</button>
+  `;
+  form.querySelector('#c-add').addEventListener('click', async () => {
+    const name = form.querySelector('#c-name').value.trim();
+    const type = form.querySelector('#c-type').value;
+    const icon = form.querySelector('#c-icon').value.trim();
+    if (!name) return alert('Enter a category name');
+    try {
+      await api('/api/categories', {
+        method: 'POST',
+        body: JSON.stringify({ name, type, icon: icon || null }),
+      });
+      await loadCategories();
+      await loadCategoriesPage();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+  container.appendChild(form);
+  wireSteppers(form);
+
+  const list = document.createElement('div');
+  list.className = 'category-list';
+  const income = cats.filter((c) => c.type === 'income');
+  const expense = cats.filter((c) => c.type === 'expense');
+  list.appendChild(renderCategoryGroup('Expense Categories', expense));
+  list.appendChild(renderCategoryGroup('Income Categories', income));
+  container.appendChild(list);
+}
+
+function renderCategoryGroup(title, cats) {
+  const group = document.createElement('div');
+  group.className = 'category-group';
+  const h = document.createElement('h3');
+  h.textContent = title;
+  group.appendChild(h);
+  if (!cats.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No categories';
+    group.appendChild(empty);
+    return group;
+  }
+  for (const c of cats) {
+    const card = document.createElement('div');
+    card.className = 'category-card';
+    const color = catColor(c.id);
+    card.innerHTML = `
+      <span class="cat-icon" style="background:${color}22;color:${color}">${escapeHtml(c.icon) || '🏷️'}</span>
+      <span class="cat-name">${escapeHtml(c.name)}</span>
+      <button class="cat-edit" data-id="${c.id}" title="Edit">✏️</button>
+      <button class="cat-delete" data-id="${c.id}" title="Delete">&times;</button>
+    `;
+    card.querySelector('.cat-edit').addEventListener('click', () => editCategory(c));
+    card.querySelector('.cat-delete').addEventListener('click', () => deleteCategory(c));
+    group.appendChild(card);
+  }
+  return group;
+}
+
+function editCategory(c) {
+  const name = prompt(`Edit category name (${c.name}):`, c.name);
+  if (name === null) return;
+  const trimmed = name.trim();
+  if (!trimmed) return alert('Name cannot be empty');
+  const type = prompt('Type (income/expense):', c.type);
+  if (type === null) return;
+  if (!['income', 'expense'].includes(type)) return alert('Type must be income or expense');
+  const icon = prompt('Icon (emoji):', c.icon || '');
+  if (icon === null) return;
+  (async () => {
+    try {
+      await api(`/api/categories/${c.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ name: trimmed, type, icon: icon.trim() || null }),
+      });
+      await loadCategories();
+      await loadCategoriesPage();
+    } catch (err) {
+      alert(err.message);
+    }
+  })();
+}
+
+async function deleteCategory(c) {
+  if (!confirm(`Delete category "${c.name}"?`)) return;
+  try {
+    await api(`/api/categories/${c.id}`, { method: 'DELETE' });
+    await loadCategories();
+    await loadCategoriesPage();
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 function wireSteppers(root = document) {
