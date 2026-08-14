@@ -218,6 +218,13 @@ async function loadBudgets() {
     }
   }
 
+  const alerts = computeBudgetAlerts(budgets, spent);
+  const alertKey = alerts.map((a) => a.msg).join('|');
+  if (alerts.length && alertKey !== lastAlertKey) {
+    lastAlertKey = alertKey;
+    alerts.forEach((a) => showAlert(a.msg, a.type));
+  }
+
   for (const b of budgets) {
     const s = spent[b.category_id] || 0;
     const pct = b.limit_amount > 0 ? Math.min(100, (s / b.limit_amount) * 100) : 0;
@@ -245,6 +252,49 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
   if (name === 'budgets') loadBudgets();
+}
+
+let lastAlertKey = '';
+
+function showAlert(message, type = 'warn') {
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `<span class="toast-icon">${type === 'danger' ? '🚨' : '⚠️'}</span><span class="toast-msg">${escapeHtml(message)}</span><button class="toast-close" aria-label="Dismiss">&times;</button>`;
+  toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
+  document.body.appendChild(toast);
+  setTimeout(() => toast.classList.add('toast-show'), 10);
+  setTimeout(() => {
+    toast.classList.remove('toast-show');
+    setTimeout(() => toast.remove(), 300);
+  }, 6000);
+}
+
+function computeBudgetAlerts(budgets, spent) {
+  const alerts = [];
+  for (const b of budgets) {
+    const s = spent[b.category_id] || 0;
+    const pct = b.limit_amount > 0 ? (s / b.limit_amount) * 100 : 0;
+    const name = b.category_name || 'Category';
+    if (s > b.limit_amount) {
+      const over = s - b.limit_amount;
+      alerts.push({ msg: `${name}: over budget by ${money(over)} (${Math.round(pct)}%)`, type: 'danger' });
+    } else if (pct >= 80) {
+      alerts.push({ msg: `${name}: ${Math.round(pct)}% of budget used (${money(s)} / ${money(b.limit_amount)})`, type: 'warn' });
+    }
+  }
+  return alerts;
+}
+
+async function checkAlertsForAdded() {
+  const budgets = await api(`/api/budgets?month=${state.month}`);
+  if (!budgets.length) return;
+  const spent = {};
+  for (const t of state.transactions) {
+    if (t.type === 'expense' && t.category_id) {
+      spent[t.category_id] = (spent[t.category_id] || 0) + t.amount;
+    }
+  }
+  computeBudgetAlerts(budgets, spent).forEach((a) => showAlert(a.msg, a.type));
 }
 
 function wireSteppers(root = document) {
@@ -294,7 +344,10 @@ document.addEventListener('DOMContentLoaded', () => {
       e.target.reset();
       $('#t-date').value = new Date().toISOString().slice(0, 10);
       await loadTransactions();
-      if (state.month === new Date().toISOString().slice(0, 7)) loadBudgets();
+      if (state.month === new Date().toISOString().slice(0, 7)) {
+        loadBudgets();
+        checkAlertsForAdded();
+      }
     } catch (err) {
       alert(err.message);
     }
