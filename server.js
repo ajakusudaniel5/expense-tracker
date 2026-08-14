@@ -1,9 +1,6 @@
 const express = require('express');
 const path = require('node:path');
-const fs = require('node:fs');
-const os = require('node:os');
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
 const db = require('./db');
 
 const app = express();
@@ -50,7 +47,7 @@ function requireAuth(req, res, next) {
   next();
 }
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/health', (req, res) => {
@@ -239,36 +236,6 @@ app.post('/api/transactions', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/transactions/import', requireAuth, (req, res) => {
-  const { rows } = req.body;
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return res.status(400).json({ error: 'rows array is required' });
-  }
-  if (rows.length > 5000) {
-    return res.status(400).json({ error: 'too many rows (max 5000)' });
-  }
-  const insert = db.prepare(
-    'INSERT INTO transactions (amount, date, type, category_id, note) VALUES (?, ?, ?, ?, ?)'
-  );
-  let inserted = 0;
-  for (const r of rows) {
-    const amount = r.amount;
-    const date = r.date;
-    const type = r.type;
-    if (typeof amount !== 'number' || amount <= 0) continue;
-    if (typeof type !== 'string' || !['income', 'expense'].includes(type)) continue;
-    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-    const catId = r.category_id != null ? Number(r.category_id) : null;
-    if (catId != null) {
-      const cat = db.prepare('SELECT id FROM categories WHERE id = ?').get(catId);
-      if (!cat) continue;
-    }
-    insert.run(amount, date, type, catId, r.note != null ? String(r.note) : null);
-    inserted++;
-  }
-  res.status(201).json({ inserted, skipped: rows.length - inserted });
-});
-
 app.put('/api/transactions/:id', requireAuth, (req, res) => {
   const { amount, date, type, category_id, note } = req.body;
   const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
@@ -343,34 +310,6 @@ app.delete('/api/budgets/:id', requireAuth, (req, res) => {
   const info = db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
-});
-
-app.post('/api/import/pdf', requireAuth, (req, res) => {
-  const { data } = req.body;
-  if (typeof data !== 'string') {
-    return res.status(400).json({ error: 'base64 PDF data is required' });
-  }
-  let buf;
-  try {
-    buf = Buffer.from(data, 'base64');
-  } catch {
-    return res.status(400).json({ error: 'invalid base64 data' });
-  }
-  if (buf.length === 0 || buf.length > 10 * 1024 * 1024) {
-    return res.status(400).json({ error: 'PDF must be between 1 byte and 10MB' });
-  }
-  if (buf.slice(0, 5).toString('latin1') !== '%PDF-') {
-    return res.status(400).json({ error: 'file is not a valid PDF' });
-  }
-  const tmpPdf = path.join(os.tmpdir(), `momo_${crypto.randomBytes(8).toString('hex')}.pdf`);
-  fs.writeFileSync(tmpPdf, buf);
-  execFile('pdftotext', ['-layout', tmpPdf, '-'], { timeout: 15000 }, (err, stdout, stderr) => {
-    fs.unlink(tmpPdf, () => {});
-    if (err) {
-      return res.status(500).json({ error: 'could not extract text from PDF: ' + (stderr || err.message) });
-    }
-    res.json({ text: stdout });
-  });
 });
 
 app.use((req, res) => {
