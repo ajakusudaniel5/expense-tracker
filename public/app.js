@@ -183,7 +183,11 @@ async function loadBudgets() {
     </div>
     <div class="field">
       <label for="b-limit">Monthly Limit</label>
-      <input type="number" id="b-limit" step="1" min="1" placeholder="0.00">
+      <div class="stepper">
+        <button type="button" class="step-btn" data-step="-1" aria-label="Decrease">&minus;</button>
+        <input type="number" id="b-limit" step="1" min="1" placeholder="0.00">
+        <button type="button" class="step-btn" data-step="1" aria-label="Increase">+</button>
+      </div>
     </div>
     <button id="b-add" type="button">Set Budget</button>
   `;
@@ -203,6 +207,7 @@ async function loadBudgets() {
     await loadBudgets();
   });
   container.appendChild(form);
+  wireSteppers(form);
 
   const list = document.createElement('div');
   list.className = 'budget-list';
@@ -242,6 +247,23 @@ function switchTab(name) {
   if (name === 'budgets') loadBudgets();
 }
 
+function wireSteppers(root = document) {
+  root.querySelectorAll('.stepper').forEach((stepper) => {
+    const input = stepper.querySelector('input[type="number"]');
+    if (!input) return;
+    stepper.querySelectorAll('.step-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const step = Number(btn.dataset.step);
+        const min = input.min !== '' ? Number(input.min) : null;
+        const current = input.value === '' ? 0 : Number(input.value);
+        let next = current + step;
+        if (min !== null && next < min) next = min;
+        input.value = next;
+      });
+    });
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const typeDropdown = customSelect($('#t-type'));
   categoryDropdown = customSelect($('#t-category'));
@@ -279,5 +301,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   $('#t-date').value = new Date().toISOString().slice(0, 10);
+  wireSteppers();
   loadCategories().then(loadTransactions);
 });

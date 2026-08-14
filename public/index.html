@@ -50,7 +50,11 @@
             </div>
             <div class="field">
               <label for="t-amount">Amount</label>
-              <input type="number" id="t-amount" step="1" min="1" required placeholder="0.00">
+              <div class="stepper">
+                <button type="button" class="step-btn" data-step="-1" aria-label="Decrease">&minus;</button>
+                <input type="number" id="t-amount" step="1" min="1" required placeholder="0.00">
+                <button type="button" class="step-btn" data-step="1" aria-label="Increase">+</button>
+              </div>
             </div>
             <div class="field">
               <label for="t-date">Date</label>
