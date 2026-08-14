@@ -47,6 +47,17 @@ function requireAuth(req, res, next) {
   next();
 }
 
+const sessionCleanup = setInterval(() => {
+  const now = Date.now();
+  for (const [token, session] of SESSIONS) {
+    if (session.expires < now) SESSIONS.delete(token);
+  }
+}, 60 * 60 * 1000);
+
+if (typeof process !== 'undefined' && process.on) {
+  process.on('exit', () => clearInterval(sessionCleanup));
+}
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -208,6 +219,12 @@ app.delete('/api/categories/:id', requireAuth, (req, res) => {
     .get(req.params.id);
   if (used.n > 0) {
     return res.status(409).json({ error: 'category is used by transactions' });
+  }
+  const budgeted = db
+    .prepare('SELECT COUNT(*) AS n FROM budgets WHERE category_id = ?')
+    .get(req.params.id);
+  if (budgeted.n > 0) {
+    return res.status(409).json({ error: 'category is used by budgets' });
   }
   const info = db.prepare('DELETE FROM categories WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });

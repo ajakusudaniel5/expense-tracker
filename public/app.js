@@ -50,6 +50,7 @@ function customSelect(selectEl) {
       item.addEventListener('click', () => {
         selectEl.value = opt.value;
         selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        renderTrigger();
         closeList();
       });
       list.appendChild(item);
@@ -177,7 +178,7 @@ function escapeHtml(str) {
   if (str == null) return '';
   const div = document.createElement('div');
   div.textContent = String(str);
-  return div.innerHTML;
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 async function deleteTransaction(id) {
@@ -185,7 +186,7 @@ async function deleteTransaction(id) {
   await loadTransactions();
 }
 
-async function loadBudgets() {
+async function loadBudgets(preferredCategoryId) {
   const budgets = await api(`/api/budgets?month=${state.month}`);
   const container = $('#budgets');
   container.innerHTML = '';
@@ -205,13 +206,17 @@ async function loadBudgets() {
         <button type="button" class="step-btn" data-step="1" aria-label="Increase">+</button>
       </div>
     </div>
-    <button id="b-add" type="button">Set Budget</button>
+    <div class="budget-form-actions">
+      <button id="b-add" type="button">Set Budget</button>
+      <button id="b-newcat" type="button" class="btn-ghost">+ New Category</button>
+    </div>
   `;
   const sel = form.querySelector('#b-category');
   sel.innerHTML = state.categories
     .filter((c) => c.type === 'expense')
     .map((c) => `<option value="${c.id}" data-icon="${escapeHtml(c.icon)}">${escapeHtml(c.name)}</option>`)
     .join('');
+  if (preferredCategoryId) sel.value = String(preferredCategoryId);
   const budgetDropdown = customSelect(sel);
   form.querySelector('#b-add').addEventListener('click', async () => {
     const limit = parseFloat(form.querySelector('#b-limit').value);
@@ -222,7 +227,58 @@ async function loadBudgets() {
     });
     await loadBudgets();
   });
+
+  const newCatForm = document.createElement('div');
+  newCatForm.className = 'new-cat-form';
+  newCatForm.style.display = 'none';
+  newCatForm.innerHTML = `
+    <div class="field">
+      <label for="bc-name">New Category Name</label>
+      <input type="text" id="bc-name" placeholder="e.g. Shopping" required>
+    </div>
+    <div class="field">
+      <label for="bc-icon">Icon</label>
+      <input type="text" id="bc-icon" maxlength="4" placeholder="🛍️">
+    </div>
+    <div class="budget-form-actions">
+      <button id="bc-add" type="button" class="btn-primary">Create Category</button>
+      <button id="bc-cancel" type="button" class="btn-ghost">Cancel</button>
+    </div>
+    <div id="bc-msg" class="form-error" style="display:none"></div>
+  `;
+  form.querySelector('#b-newcat').addEventListener('click', () => {
+    const showing = newCatForm.style.display !== 'none';
+    newCatForm.style.display = showing ? 'none' : 'grid';
+    if (!showing) form.querySelector('#bc-name').focus();
+  });
+  newCatForm.querySelector('#bc-cancel').addEventListener('click', () => {
+    newCatForm.style.display = 'none';
+  });
+  newCatForm.querySelector('#bc-add').addEventListener('click', async () => {
+    const name = newCatForm.querySelector('#bc-name').value.trim();
+    const icon = newCatForm.querySelector('#bc-icon').value.trim();
+    const msg = newCatForm.querySelector('#bc-msg');
+    msg.style.display = 'none';
+    if (!name) {
+      msg.textContent = 'Enter a category name';
+      msg.style.display = 'block';
+      return;
+    }
+    try {
+      const created = await api('/api/categories', {
+        method: 'POST',
+        body: JSON.stringify({ name, type: 'expense', icon: icon || null }),
+      });
+      state.categories = await api('/api/categories');
+      await loadCategories();
+      await loadBudgets(created.id);
+    } catch (err) {
+      msg.textContent = err.message;
+      msg.style.display = 'block';
+    }
+  });
   container.appendChild(form);
+  container.appendChild(newCatForm);
   wireSteppers(form);
 
   const list = document.createElement('div');
@@ -252,9 +308,50 @@ async function loadBudgets() {
       <span style="font-weight:600;color:${color}">${escapeHtml(b.category_icon)} ${escapeHtml(b.category_name)}</span>
       <div class="budget-bar"><div class="fill ${over ? 'over' : ''}" style="width:${pct}%;background:${over ? '#ff6b7a' : color}"></div></div>
       <span class="spent ${over ? 'over' : 'ok'}">${money(s)}</span>
-      <span class="limit">/ ${money(b.limit_amount)}</span>
+      <span class="limit">/ <span class="limit-val">${money(b.limit_amount)}</span></span>
+      <button class="edit" data-id="${b.id}" title="Edit limit">✏️</button>
       <button class="delete" data-id="${b.id}" title="Delete">&times;</button>
     `;
+    const limitSpan = card.querySelector('.limit-val');
+    card.querySelector('.edit').addEventListener('click', () => {
+      if (card.classList.contains('editing')) return;
+      card.classList.add('editing');
+      const current = b.limit_amount;
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = '1';
+      input.min = '1';
+      input.value = current;
+      input.className = 'limit-edit';
+      limitSpan.replaceWith(input);
+      input.focus();
+      input.select();
+      const save = async () => {
+        const next = parseFloat(input.value);
+        if (!next || next <= 0) {
+          alert('Enter a valid limit');
+          input.focus();
+          return;
+        }
+        await api('/api/budgets', {
+          method: 'POST',
+          body: JSON.stringify({ category_id: b.category_id, month: b.month, limit_amount: next }),
+        });
+        await loadBudgets();
+      };
+      const cancel = () => {
+        const repl = document.createElement('span');
+        repl.className = 'limit-val';
+        repl.textContent = money(current);
+        input.replaceWith(repl);
+        card.classList.remove('editing');
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+      });
+      input.addEventListener('blur', save);
+    });
     card.querySelector('.delete').addEventListener('click', async () => {
       await api(`/api/budgets/${b.id}`, { method: 'DELETE' });
       await loadBudgets();
@@ -339,13 +436,22 @@ async function loadCategoriesPage() {
       <label for="c-icon">Icon</label>
       <input type="text" id="c-icon" maxlength="4" placeholder="🛍️">
     </div>
-    <button id="c-add" type="button">Add Category</button>
+    <div class="budget-form-actions">
+      <button id="c-add" type="button">Add Category</button>
+    </div>
+    <div id="c-msg" class="form-error" style="display:none"></div>
   `;
   form.querySelector('#c-add').addEventListener('click', async () => {
     const name = form.querySelector('#c-name').value.trim();
     const type = form.querySelector('#c-type').value;
     const icon = form.querySelector('#c-icon').value.trim();
-    if (!name) return alert('Enter a category name');
+    const msg = form.querySelector('#c-msg');
+    msg.style.display = 'none';
+    if (!name) {
+      msg.textContent = 'Enter a category name';
+      msg.style.display = 'block';
+      return;
+    }
     try {
       await api('/api/categories', {
         method: 'POST',
@@ -354,7 +460,8 @@ async function loadCategoriesPage() {
       await loadCategories();
       await loadCategoriesPage();
     } catch (err) {
-      alert(err.message);
+      msg.textContent = err.message;
+      msg.style.display = 'block';
     }
   });
   container.appendChild(form);

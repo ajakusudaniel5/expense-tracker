@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: expense-tracker
+    runtime: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: NODE_VERSION
+        value: 22
+    disk:
+      name: expense-tracker-data
+      mountPath: /data
+      sizeGB: 1
