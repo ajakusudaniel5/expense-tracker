@@ -648,6 +648,41 @@ button[type="submit"]:active {
 
 .budget-list { margin-top: 20px; }
 
+.budget-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.budget-summary-item {
+  background: var(--surface);
+  border: 1px solid var(--surface-border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+
+.budget-summary-item .label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.budget-summary-item .value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.budget-summary-item.over .value { color: var(--expense); }
+
+@media (max-width: 600px) {
+  .budget-summary { grid-template-columns: 1fr; }
+}
+
 .budget-card {
   display: flex;
   align-items: center;

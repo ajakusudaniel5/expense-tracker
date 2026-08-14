@@ -226,9 +226,18 @@ async function loadBudgets(preferredCategoryId) {
   form.querySelector('#b-add').addEventListener('click', async () => {
     const limit = parseFloat(form.querySelector('#b-limit').value);
     if (!limit || limit <= 0) return alert('Enter a valid limit');
+    const categoryId = Number(sel.value);
+    const existingBudget = budgets.find((b) => b.category_id === categoryId);
+    const currentTotal = budgets.reduce((sum, b) => sum + b.limit_amount, 0) - (existingBudget ? existingBudget.limit_amount : 0);
+    const income = state.transactions
+      .filter((t) => t.type === 'income')
+      .reduce((sum, t) => sum + t.amount, 0);
+    if (currentTotal + limit > income) {
+      return alert(`This budget exceeds your monthly income. Income: ${money(income)}, Budgeted after this: ${money(currentTotal + limit)}.`);
+    }
     await api('/api/budgets', {
       method: 'POST',
-      body: JSON.stringify({ category_id: Number(sel.value), month: state.month, limit_amount: limit }),
+      body: JSON.stringify({ category_id: categoryId, month: state.month, limit_amount: limit }),
     });
     await loadBudgets();
   });
@@ -289,11 +298,36 @@ async function loadBudgets(preferredCategoryId) {
   const list = document.createElement('div');
   list.className = 'budget-list';
   const spent = {};
+  let monthIncome = 0;
   for (const t of state.transactions) {
     if (t.type === 'expense' && t.category_id) {
       spent[t.category_id] = (spent[t.category_id] || 0) + t.amount;
+    } else if (t.type === 'income') {
+      monthIncome += t.amount;
     }
   }
+
+  const totalBudgeted = budgets.reduce((sum, b) => sum + b.limit_amount, 0);
+  const remaining = monthIncome - totalBudgeted;
+  const overBudgeted = remaining < 0;
+
+  const summary = document.createElement('div');
+  summary.className = 'budget-summary';
+  summary.innerHTML = `
+    <div class="budget-summary-item">
+      <span class="label">Total Budgeted</span>
+      <span class="value">${money(totalBudgeted)}</span>
+    </div>
+    <div class="budget-summary-item">
+      <span class="label">Monthly Income</span>
+      <span class="value">${money(monthIncome)}</span>
+    </div>
+    <div class="budget-summary-item ${overBudgeted ? 'over' : ''}">
+      <span class="label">${overBudgeted ? 'Over Budget' : 'Unallocated'}</span>
+      <span class="value">${money(Math.abs(remaining))}</span>
+    </div>
+  `;
+  container.appendChild(summary);
 
   const alerts = computeBudgetAlerts(budgets, spent);
   const alertKey = alerts.map((a) => a.msg).join('|');
@@ -335,6 +369,15 @@ async function loadBudgets(preferredCategoryId) {
         const next = parseFloat(input.value);
         if (!next || next <= 0) {
           alert('Enter a valid limit');
+          input.focus();
+          return;
+        }
+        const otherTotal = budgets.reduce((sum, bb) => (bb.id === b.id ? sum : sum + bb.limit_amount), 0);
+        const income = state.transactions
+          .filter((t) => t.type === 'income')
+          .reduce((sum, t) => sum + t.amount, 0);
+        if (otherTotal + next > income) {
+          alert(`This budget exceeds your monthly income. Income: ${money(income)}, Budgeted after this: ${money(otherTotal + next)}.`);
           input.focus();
           return;
         }
