@@ -868,13 +868,66 @@ function normalizeDate(str) {
   return null;
 }
 
+function parseMTNStatement(text) {
+  const USER = /MSISDN:\s*(\d+)/.exec(text);
+  const userMsisdn = USER ? USER[1] : '';
+  const monthMap = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' };
+  // Right side of each row: TYPE AMOUNT FEES E-LEVY BAL_BEFORE BAL_AFTER TO_NO TO_NAME TO_ACCT F_ID
+  // (regex-based, robust to the FROM-column widths shifting between rows)
+  const rightRe = /^(\d{2})-([A-Za-z]{3})-(\d{4})\s+\S.*?\s+([A-Z\s]+?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+)\s*([A-Za-z0-9\/\.\-\s]*?)\s+(\d+)\s+(\d+)/;
+  // Left side: FROM_ACCT [FROM_NAME] FROM_NO (FROM_NAME present only when it starts with a letter)
+  const leftRe = /^(\d{2}-[A-Za-z]{3}-\d{4})\s+\d{2}:\d{2}:\d{2}\s+[AP]M\s+(\d+)(?:\s+([A-Za-z][A-Za-z0-9\/\.\-\s]*?))?\s+(\d+)\s+/;
+  const out = [];
+  for (const line of text.split('\n')) {
+    const m = rightRe.exec(line);
+    if (!m) continue;
+    const amount = parseFloat(m[5]);
+    if (!(amount > 0)) continue;
+    const transType = m[4].trim() || 'TRANSFER';
+    const toNo = m[10];
+    const toName = m[11].trim();
+    const isIncome = !!userMsisdn && toNo === userMsisdn;
+    const l = leftRe.exec(line);
+    let note;
+    if (isIncome) {
+      const fromName = l && l[3] ? l[3].trim() : '';
+      const fromNo = l ? l[4] : '';
+      note = fromName || (fromNo && fromNo !== '0' ? fromNo : 'Income');
+    } else {
+      note = toName || transType;
+    }
+    out.push({
+      amount,
+      date: `${m[3]}-${monthMap[m[2]]}-${m[1]}`,
+      type: isIncome ? 'income' : 'expense',
+      note,
+    });
+  }
+  return out;
+}
+
 function renderImportCard() {
   const card = document.createElement('div');
   card.className = 'settings-card';
   card.style.maxWidth = '640px';
   card.innerHTML = `
-    <h3>Import from CSV</h3>
-    <p class="muted">Upload a CSV (e.g. converted from your MTN MoMo statement) or paste its text, then map the columns.</p>
+    <h3>Import transactions</h3>
+
+    <div class="imp-mtn">
+      <h4>MTN MoMo statement</h4>
+      <p class="muted">Paste the text of your MTN MoMo statement (open the PDF and copy the text, or run pdftotext) and it will be parsed automatically.</p>
+      <div class="field">
+        <label for="imp-mtn-text">Paste MTN statement text</label>
+        <textarea id="imp-mtn-text" rows="8" placeholder="MOBILE MONEY TRANSACTION HISTORY&#10;...&#10;13-Aug-2026 05:18:48 PM ... TRANSFER 30.5 ..."></textarea>
+      </div>
+      <button type="button" id="imp-mtn-run" class="btn-primary">Parse MTN statement</button>
+      <div id="imp-mtn-result"></div>
+    </div>
+
+    <hr class="imp-divider">
+
+    <h4>Generic CSV</h4>
+    <p class="muted">Upload any CSV or paste its text, then map the columns.</p>
     <div class="field">
       <label for="imp-file">Upload CSV file</label>
       <input type="file" id="imp-file" accept=".csv,text/csv">
@@ -883,7 +936,7 @@ function renderImportCard() {
       <label for="imp-text">Or paste CSV text</label>
       <textarea id="imp-text" rows="6" placeholder="date,description,amount"></textarea>
     </div>
-    <button type="button" id="imp-parse" class="btn-primary">Parse</button>
+    <button type="button" id="imp-parse" class="btn-primary">Parse CSV</button>
     <div id="imp-result"></div>
   `;
   card.querySelector('#imp-file').addEventListener('change', (e) => {
@@ -902,6 +955,35 @@ function renderImportCard() {
       return;
     }
     buildMappingUI(result, rows);
+  });
+  card.querySelector('#imp-mtn-run').addEventListener('click', async () => {
+    const text = card.querySelector('#imp-mtn-text').value;
+    const result = card.querySelector('#imp-mtn-result');
+    const rows = parseMTNStatement(text);
+    if (!rows.length) {
+      result.innerHTML = '<p class="error">No MTN transaction rows detected. Make sure you pasted the statement text with the "13-Aug-2026 ..." rows.</p>';
+      return;
+    }
+    const preview = rows.slice(0, 6).map((r) => `<tr><td>${escapeHtml(r.date)}</td><td>${r.type === 'income' ? '+' : '-'}${escapeHtml(String(r.amount))}</td><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.note)}</td></tr>`).join('');
+    result.innerHTML = `
+      <p class="muted">Detected ${rows.length} transactions. Preview:</p>
+      <div class="imp-preview"><table class="imp-table"><tr><th>Date</th><th>Amount</th><th>Type</th><th>Note</th></tr>${preview}</table></div>
+      <div class="btn-row"><button type="button" id="imp-mtn-confirm" class="btn-primary">Import ${rows.length} transactions</button><span id="imp-mtn-msg" class="muted"></span></div>
+    `;
+    result.querySelector('#imp-mtn-confirm').addEventListener('click', async () => {
+      const msg = result.querySelector('#imp-mtn-msg');
+      msg.textContent = 'Importing...';
+      try {
+        const res = await api('/api/transactions/import', { method: 'POST', body: JSON.stringify({ rows }) });
+        msg.textContent = '';
+        alert(`Imported ${res.inserted} transactions (${res.skipped} skipped).`);
+        result.innerHTML = '<p class="muted">Done.</p>';
+        card.querySelector('#imp-mtn-text').value = '';
+      } catch (err) {
+        msg.textContent = '';
+        alert(err.message);
+      }
+    });
   });
   return card;
 }

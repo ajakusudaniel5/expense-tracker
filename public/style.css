@@ -966,3 +966,10 @@ button[type="submit"]:active {
   font-weight: 600;
 }
 .imp-table td { padding: 6px 8px; border-bottom: 1px solid var(--surface-border); }
+
+.imp-mtn h4 { margin-bottom: 4px; }
+.imp-divider {
+  border: none;
+  border-top: 1px solid var(--surface-border);
+  margin: 20px 0;
+}
