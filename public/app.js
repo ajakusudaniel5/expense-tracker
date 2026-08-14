@@ -365,7 +365,9 @@ async function loadBudgets(preferredCategoryId) {
       limitSpan.replaceWith(input);
       input.focus();
       input.select();
+      let saving = false;
       const save = async () => {
+        if (saving) return;
         const next = parseFloat(input.value);
         if (!next || next <= 0) {
           alert('Enter a valid limit');
@@ -381,11 +383,16 @@ async function loadBudgets(preferredCategoryId) {
           input.focus();
           return;
         }
-        await api('/api/budgets', {
-          method: 'POST',
-          body: JSON.stringify({ category_id: b.category_id, month: b.month, limit_amount: next }),
-        });
-        await loadBudgets();
+        saving = true;
+        try {
+          await api('/api/budgets', {
+            method: 'POST',
+            body: JSON.stringify({ category_id: b.category_id, month: b.month, limit_amount: next }),
+          });
+          await loadBudgets();
+        } finally {
+          saving = false;
+        }
       };
       const cancel = () => {
         const repl = document.createElement('span');

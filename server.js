@@ -47,6 +47,16 @@ function newSalt() {
   return crypto.randomBytes(16).toString('hex');
 }
 
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+async function monthIncome(month) {
+  const rows = await db
+    .prepare("SELECT amount FROM transactions WHERE type = 'income' AND substr(date, 1, 7) = ?")
+    .all(month);
+  return rows.reduce((sum, r) => sum + r.amount, 0);
+}
+
 const ENV_PIN = process.env.APP_PIN || null;
 
 async function getPinRow() {
@@ -239,7 +249,7 @@ app.post('/api/reports/delete', requireAuth, async (req, res) => {
   if (scope === 'all') {
     info = await db.prepare('DELETE FROM transactions').run();
   } else if (scope === 'month') {
-    if (typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
+    if (typeof month !== 'string' || !MONTH_RE.test(month)) {
       return res.status(400).json({ error: 'month must be YYYY-MM' });
     }
     info = await db.prepare("DELETE FROM transactions WHERE substr(date, 1, 7) = ?").run(month);
@@ -349,8 +359,8 @@ app.post('/api/transactions', requireAuth, async (req, res) => {
   if (!['income', 'expense'].includes(type)) {
     return res.status(400).json({ error: 'type must be income or expense' });
   }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  if (!DATE_RE.test(date)) {
+    return res.status(400).json({ error: 'date must be a valid YYYY-MM-DD date' });
   }
   if (category_id != null) {
     const cat = await db.prepare('SELECT id FROM categories WHERE id = ?').get(category_id);
@@ -381,8 +391,8 @@ app.put('/api/transactions/:id', requireAuth, async (req, res) => {
   if (type !== undefined && !['income', 'expense'].includes(type)) {
     return res.status(400).json({ error: 'type must be income or expense' });
   }
-  if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  if (date !== undefined && !DATE_RE.test(date)) {
+    return res.status(400).json({ error: 'date must be a valid YYYY-MM-DD date' });
   }
   const updated = {
     amount: amount ?? existing.amount,
@@ -429,11 +439,21 @@ app.post('/api/budgets', requireAuth, async (req, res) => {
   if (typeof limit_amount !== 'number' || limit_amount <= 0) {
     return res.status(400).json({ error: 'limit_amount must be a positive number' });
   }
-  if (!/^\d{4}-\d{2}$/.test(month)) {
-    return res.status(400).json({ error: 'month must be YYYY-MM' });
+  if (typeof month !== 'string' || !MONTH_RE.test(month)) {
+    return res.status(400).json({ error: 'month must be a valid YYYY-MM month' });
   }
   const cat = await db.prepare('SELECT id FROM categories WHERE id = ?').get(category_id);
   if (!cat) return res.status(400).json({ error: 'invalid category_id' });
+  const income = await monthIncome(month);
+  const existing = await db.prepare(
+    'SELECT SUM(limit_amount) AS total FROM budgets WHERE month = ? AND category_id <> ?'
+  ).get(month, category_id);
+  const otherTotal = existing.total || 0;
+  if (otherTotal + limit_amount > income) {
+    return res.status(400).json({
+      error: `total budgeted (${(otherTotal + limit_amount).toFixed(2)}) exceeds monthly income (${income.toFixed(2)})`,
+    });
+  }
   await db.prepare(
     'INSERT INTO budgets (category_id, month, limit_amount) VALUES (?, ?, ?) ' +
       'ON CONFLICT (category_id, month) DO UPDATE SET limit_amount = excluded.limit_amount'
