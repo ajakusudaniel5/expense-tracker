@@ -848,7 +848,9 @@ async function tryUnlock() {
     if (!res.ok) {
       err.textContent = body.error || 'Incorrect PIN';
       err.style.display = 'block';
-      $('#lock-pin').value = '';
+      if ($('#lock-pin').value.trim().length >= 8) {
+        $('#lock-pin').value = '';
+      }
       $('#lock-pin').focus();
       return;
     }
@@ -1108,12 +1110,13 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   let lockDebounce = null;
   $('#lock-pin').addEventListener('input', () => {
+    $('#lock-error').style.display = 'none';
     const len = $('#lock-pin').value.trim().length;
     if (len < 4) return;
     clearTimeout(lockDebounce);
     lockDebounce = setTimeout(() => {
       if ($('#lock-pin').value.trim().length >= 4) tryUnlock();
-    }, 300);
+    }, 700);
   });
   $('#setup-run').addEventListener('click', setupPin);
   $('#setup-pin2').addEventListener('keydown', (e) => {
