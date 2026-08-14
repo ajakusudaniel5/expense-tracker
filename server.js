@@ -120,6 +120,62 @@ app.post('/api/pin/remove', requireAuth, (req, res) => {
   res.json({ enabled: false });
 });
 
+function getSetting(key) {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+function setSetting(key, value) {
+  db.prepare(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run(key, value);
+}
+
+app.get('/api/profile', requireAuth, (req, res) => {
+  res.json({
+    name: getSetting('profile_name') || '',
+    email: getSetting('profile_email') || '',
+    currency: getSetting('profile_currency') || 'GH₵',
+  });
+});
+
+app.put('/api/profile', requireAuth, (req, res) => {
+  const { name, email } = req.body;
+  if (name !== undefined) {
+    if (typeof name !== 'string' || name.trim().length > 100) {
+      return res.status(400).json({ error: 'name must be a string up to 100 characters' });
+    }
+    setSetting('profile_name', name.trim());
+  }
+  if (email !== undefined) {
+    if (typeof email !== 'string' || email.length > 200) {
+      return res.status(400).json({ error: 'email must be a string up to 200 characters' });
+    }
+    setSetting('profile_email', email.trim());
+  }
+  res.json({
+    name: getSetting('profile_name') || '',
+    email: getSetting('profile_email') || '',
+    currency: getSetting('profile_currency') || 'GH₵',
+  });
+});
+
+app.post('/api/reports/delete', requireAuth, (req, res) => {
+  const { scope, month } = req.body;
+  let info;
+  if (scope === 'all') {
+    info = db.prepare('DELETE FROM transactions').run();
+  } else if (scope === 'month') {
+    if (typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'month must be YYYY-MM' });
+    }
+    info = db.prepare("DELETE FROM transactions WHERE substr(date, 1, 7) = ?").run(month);
+  } else {
+    return res.status(400).json({ error: "scope must be 'all' or 'month'" });
+  }
+  res.json({ deleted: info.changes });
+});
+
 app.get('/api/categories', requireAuth, (req, res) => {
   const rows = db.prepare('SELECT * FROM categories ORDER BY name').all();
   res.json(rows);

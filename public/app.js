@@ -816,8 +816,106 @@ async function loadSettingsPage() {
     });
   }
   container.appendChild(card);
+  container.appendChild(await renderProfileCard());
+  container.appendChild(await renderDeleteReportsCard());
 }
 
+async function renderProfileCard() {
+  const card = document.createElement('div');
+  card.className = 'settings-card';
+  card.innerHTML = '<div class="empty">Loading profile...</div>';
+  let profile;
+  try {
+    profile = await api('/api/profile');
+  } catch (err) {
+    card.innerHTML = '<div class="empty">Could not load profile.</div>';
+    return card;
+  }
+  card.innerHTML = `
+    <h3>My Profile</h3>
+    <span class="settings-status on">● ${escapeHtml(profile.currency || 'GH₵')}</span>
+    <div class="field">
+      <label for="p-name">Name</label>
+      <input type="text" id="p-name" value="${escapeHtml(profile.name || '')}" placeholder="Your name">
+    </div>
+    <div class="field">
+      <label for="p-email">Email</label>
+      <input type="text" id="p-email" value="${escapeHtml(profile.email || '')}" placeholder="you@example.com">
+    </div>
+    <button type="button" id="p-save" class="btn-primary">Save Profile</button>
+    <span id="p-msg" class="muted"></span>
+  `;
+  card.querySelector('#p-save').addEventListener('click', async () => {
+    const msg = card.querySelector('#p-msg');
+    const name = card.querySelector('#p-name').value;
+    const email = card.querySelector('#p-email').value;
+    msg.textContent = 'Saving...';
+    try {
+      const res = await api('/api/profile', {
+        method: 'PUT',
+        body: JSON.stringify({ name, email }),
+      });
+      msg.textContent = 'Saved.';
+      profile = res;
+    } catch (err) {
+      msg.textContent = err.message;
+    }
+  });
+  return card;
+}
+
+async function renderDeleteReportsCard() {
+  const card = document.createElement('div');
+  card.className = 'settings-card';
+  card.innerHTML = '<div class="empty">Loading...</div>';
+  let allTx;
+  try {
+    allTx = await api('/api/transactions');
+  } catch (err) {
+    card.innerHTML = '<div class="empty">Could not load data.</div>';
+    return card;
+  }
+  const months = [...new Set(allTx.map((t) => t.date.slice(0, 7)))].sort().reverse();
+  const total = allTx.length;
+  card.innerHTML = `
+    <h3>Delete Reports</h3>
+    <p class="muted">Reports are generated from your transactions. Deleting a period's data removes it from the reports.</p>
+    <div class="field">
+      <label for="d-month">Delete a specific month</label>
+      <select id="d-month">${months.length ? months.map((m) => `<option value="${m}">${m}</option>`).join('') : '<option value="">No months with data</option>'}</select>
+    </div>
+    <div class="btn-row">
+      <button type="button" id="d-month-run" class="btn-danger" ${months.length ? '' : 'disabled'}>Delete selected month</button>
+      <button type="button" id="d-all-run" class="btn-danger">Delete all transactions (${total})</button>
+    </div>
+    <span id="d-msg" class="muted"></span>
+  `;
+  card.querySelector('#d-month-run').addEventListener('click', async () => {
+    const month = card.querySelector('#d-month').value;
+    if (!month) return;
+    if (!confirm(`Delete all transactions for ${month}? This cannot be undone.`)) return;
+    await runDelete({ scope: 'month', month }, card);
+  });
+  card.querySelector('#d-all-run').addEventListener('click', async () => {
+    if (!confirm(`Delete ALL ${total} transactions? This cannot be undone.`)) return;
+    await runDelete({ scope: 'all' }, card);
+  });
+  return card;
+}
+
+async function runDelete(payload, card) {
+  const msg = card.querySelector('#d-msg');
+  msg.textContent = 'Deleting...';
+  try {
+    const res = await api('/api/reports/delete', { method: 'POST', body: JSON.stringify(payload) });
+    msg.textContent = `Deleted ${res.deleted} transaction(s).`;
+    await loadSettingsPage();
+    loadTransactions();
+    loadBudgets();
+  } catch (err) {
+    msg.textContent = err.message;
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   const typeDropdown = customSelect($('#t-type'));
