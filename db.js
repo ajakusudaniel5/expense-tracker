@@ -1,18 +1,15 @@
-const { DatabaseSync } = require('node:sqlite');
-const fs = require('node:fs');
-const path = require('node:path');
+const { createClient } = require('@libsql/client');
 
-const dataDir = process.env.DATA_DIR || path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-  fs.mkdirSync(dataDir, { recursive: true });
+const url = process.env.TURSO_URL;
+const authToken = process.env.TURSO_AUTH_TOKEN;
+
+if (!url) {
+  throw new Error('TURSO_URL env var is required');
 }
 
-const dbPath = path.join(dataDir, 'tracker.db');
-const db = new DatabaseSync(dbPath);
+const client = createClient({ url, authToken, rowMode: 'object', intMode: 'number' });
 
-db.exec(`
-  PRAGMA journal_mode = WAL;
-
+const SCHEMA = `
   CREATE TABLE IF NOT EXISTS categories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
@@ -46,23 +43,47 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
-`);
+`;
 
-const seed = db.prepare('SELECT id FROM seed_marker WHERE id = 1').get();
-if (!seed) {
-  const insertCat = db.prepare(
-    'INSERT OR IGNORE INTO categories (name, type, icon) VALUES (?, ?, ?)'
-  );
-  insertCat.run('Food', 'expense', '🍔');
-  insertCat.run('Transport', 'expense', '🚗');
-  insertCat.run('Housing', 'expense', '🏠');
-  insertCat.run('Utilities', 'expense', '💡');
-  insertCat.run('Health', 'expense', '💊');
-  insertCat.run('Entertainment', 'expense', '🎬');
-  insertCat.run('Allowance', 'income', '🪙');
-  insertCat.run('Gifts', 'income', '🎁');
-  insertCat.run('Other', 'expense', '📦');
-  db.prepare('INSERT OR IGNORE INTO seed_marker (id) VALUES (1)').run();
+function prepare(sql) {
+  return {
+    async get(...args) {
+      const res = await client.execute({ sql, args });
+      return res.rows[0];
+    },
+    async all(...args) {
+      const res = await client.execute({ sql, args });
+      return res.rows;
+    },
+    async run(...args) {
+      const res = await client.execute({ sql, args });
+      const lastInsertRowid =
+        typeof res.lastInsertRowid === 'bigint'
+          ? Number(res.lastInsertRowid)
+          : res.lastInsertRowid;
+      return { changes: res.rowsAffected, lastInsertRowid };
+    },
+  };
 }
 
-module.exports = db;
+async function init() {
+  await client.executeMultiple(SCHEMA);
+  const seed = await prepare('SELECT id FROM seed_marker WHERE id = 1').get();
+  if (!seed) {
+    const insertCat = prepare(
+      'INSERT OR IGNORE INTO categories (name, type, icon) VALUES (?, ?, ?)'
+    );
+    await insertCat.run('Food', 'expense', '🍔');
+    await insertCat.run('Transport', 'expense', '🚗');
+    await insertCat.run('Housing', 'expense', '🏠');
+    await insertCat.run('Utilities', 'expense', '💡');
+    await insertCat.run('Health', 'expense', '💊');
+    await insertCat.run('Entertainment', 'expense', '🎬');
+    await insertCat.run('Allowance', 'income', '🪙');
+    await insertCat.run('Gifts', 'income', '🎁');
+    await insertCat.run('Other', 'expense', '📦');
+    await prepare('INSERT OR IGNORE INTO seed_marker (id) VALUES (1)').run();
+  }
+}
+
+module.exports = { db: { prepare, client }, init };

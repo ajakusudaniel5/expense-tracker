@@ -8,11 +8,9 @@ services:
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
-      - key: DATA_DIR
-        value: /data
       - key: NODE_VERSION
         value: 22
-    disk:
-      name: expense-tracker-data
-      mountPath: /data
-      sizeGB: 1
+      - key: TURSO_URL
+        value: libsql://expense-database-ajakusudaniel5.aws-us-east-2.turso.io
+      - key: TURSO_AUTH_TOKEN
+        sync: false

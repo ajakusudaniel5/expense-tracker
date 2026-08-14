@@ -111,6 +111,11 @@ async function api(path, options = {}) {
     showLockScreen();
     throw new Error('App is locked');
   }
+  if (res.status === 403) {
+    setToken(null);
+    showSetupScreen();
+    throw new Error('setup required');
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || 'Request failed');
@@ -783,6 +788,48 @@ function showLockScreen() {
   pinInput.focus();
 }
 
+function showSetupScreen() {
+  const screen = $('#setup-screen');
+  screen.style.display = 'flex';
+  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+}
+
+async function setupPin() {
+  const pin = $('#setup-pin').value;
+  const pin2 = $('#setup-pin2').value;
+  const err = $('#setup-error');
+  if (!/^\d{4,8}$/.test(pin)) {
+    err.textContent = 'PIN must be 4-8 digits';
+    err.style.display = 'block';
+    return;
+  }
+  if (pin !== pin2) {
+    err.textContent = 'PINs do not match';
+    err.style.display = 'block';
+    return;
+  }
+  try {
+    await api('/api/pin/set', {
+      method: 'POST',
+      body: JSON.stringify({ pin }),
+    });
+    $('#setup-screen').style.display = 'none';
+    $('#lock-btn').style.display = '';
+    const res = await fetch('/api/pin/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    });
+    const body = await res.json();
+    setToken(body.token);
+    document.querySelector('.tab[data-tab="dashboard"]').click();
+    loadCategories().then(loadTransactions);
+  } catch (e) {
+    err.textContent = e.message || 'Could not set PIN';
+    err.style.display = 'block';
+  }
+}
+
 async function tryUnlock() {
   const pin = $('#lock-pin').value.trim();
   const err = $('#lock-error');
@@ -835,10 +882,12 @@ async function loadSettingsPage() {
   const card = document.createElement('div');
   card.className = 'settings-card';
   if (status.enabled) {
+    const changeable = status.changeable !== false;
     card.innerHTML = `
       <h3>PIN Lock</h3>
       <span class="settings-status on">● Enabled</span>
       <p class="muted">Your app is protected by a PIN. Anyone without the PIN cannot view your data.</p>
+      ${changeable ? `
       <div class="field">
         <label for="s-current">Current PIN</label>
         <input type="password" id="s-current" inputmode="numeric" maxlength="8" autocomplete="off">
@@ -853,42 +902,28 @@ async function loadSettingsPage() {
       </div>
       <div class="btn-row">
         <button type="button" id="s-change" class="btn-primary">Change PIN</button>
-        <button type="button" id="s-remove" class="btn-danger">Disable PIN</button>
       </div>
+      ` : '<p class="muted">Your PIN is managed by the server and cannot be changed from the app.</p>'}
     `;
-    card.querySelector('#s-change').addEventListener('click', async () => {
-      const cur = card.querySelector('#s-current').value;
-      const next = card.querySelector('#s-new').value;
-      const confirm = card.querySelector('#s-confirm').value;
-      if (!/^\d{4,8}$/.test(next)) return alert('New PIN must be 4-8 digits');
-      if (next !== confirm) return alert('PINs do not match');
-      try {
-        await api('/api/pin/change', {
-          method: 'POST',
-          body: JSON.stringify({ current_pin: cur, new_pin: next }),
-        });
-        alert('PIN changed successfully');
-        await loadSettingsPage();
-      } catch (err) {
-        alert(err.message);
-      }
-    });
-    card.querySelector('#s-remove').addEventListener('click', async () => {
-      const cur = card.querySelector('#s-current').value;
-      if (!confirm('Disable PIN protection? Anyone will be able to open the app.')) return;
-      try {
-        await api('/api/pin/remove', {
-          method: 'POST',
-          body: JSON.stringify({ pin: cur }),
-        });
-        setToken(null);
-        $('#lock-btn').style.display = 'none';
-        alert('PIN disabled');
-        await loadSettingsPage();
-      } catch (err) {
-        alert(err.message);
-      }
-    });
+    if (changeable) {
+      card.querySelector('#s-change').addEventListener('click', async () => {
+        const cur = card.querySelector('#s-current').value;
+        const next = card.querySelector('#s-new').value;
+        const confirm = card.querySelector('#s-confirm').value;
+        if (!/^\d{4,8}$/.test(next)) return alert('New PIN must be 4-8 digits');
+        if (next !== confirm) return alert('PINs do not match');
+        try {
+          await api('/api/pin/change', {
+            method: 'POST',
+            body: JSON.stringify({ current_pin: cur, new_pin: next }),
+          });
+          alert('PIN changed successfully');
+          await loadSettingsPage();
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    }
   } else {
     card.innerHTML = `
       <h3>PIN Lock</h3>
@@ -1071,6 +1106,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#lock-pin').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') tryUnlock();
   });
+  $('#setup-run').addEventListener('click', setupPin);
+  $('#setup-pin2').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') setupPin();
+  });
 
   (async () => {
     let status = { enabled: false };
@@ -1093,7 +1132,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       showLockScreen();
     } else {
-      loadCategories().then(loadTransactions);
+      showSetupScreen();
     }
   })();
 });

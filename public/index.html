@@ -116,6 +116,18 @@
     </div>
   </div>
 
+  <div id="setup-screen" class="lock-screen" style="display:none">
+    <div class="lock-box">
+      <div class="lock-icon">🔐</div>
+      <h2>Set Up PIN</h2>
+      <p class="muted">Choose a PIN to protect your app. This cannot be disabled once set.</p>
+      <input type="password" id="setup-pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="New PIN" autocomplete="off">
+      <input type="password" id="setup-pin2" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Confirm PIN" autocomplete="off">
+      <button id="setup-run" type="button">Enable PIN</button>
+      <p id="setup-error" class="error" style="display:none"></p>
+    </div>
+  </div>
+
   <script src="app.js"></script>
 </body>
 </html>
