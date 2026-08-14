@@ -428,41 +428,31 @@ button[type="submit"]:active {
   padding: 28px;
 }
 
-.budget-row {
-  display: flex;
-  align-items: center;
+.budget-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
+  align-items: end;
   margin-bottom: 16px;
-  flex-wrap: wrap;
 }
 
-.budget-row input {
-  padding: 9px 12px;
-  border: 1px solid var(--surface-border);
-  background: var(--bg-soft);
-  color: var(--text);
-  border-radius: 14px;
-  font-size: 14px;
-  outline: none;
+.budget-form .field {
+  margin-bottom: 0;
 }
 
-.budget-select-wrap {
-  min-width: 160px;
-  flex: 0 1 auto;
-}
-
-.budget-row button {
-  padding: 9px 16px;
+.budget-form button {
+  padding: 10px 16px;
   border: none;
   border-radius: 10px;
   background: linear-gradient(135deg, var(--accent), #a78bfa);
   color: #fff;
   font-weight: 600;
   cursor: pointer;
+  height: 40px;
   transition: filter 0.2s ease;
 }
 
-.budget-row button:hover { filter: brightness(1.12); }
+.budget-form button:hover { filter: brightness(1.12); }
 
 .budget-list { margin-top: 20px; }
 

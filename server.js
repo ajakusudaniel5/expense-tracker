@@ -39,6 +39,12 @@ app.post('/api/categories', (req, res) => {
 });
 
 app.delete('/api/categories/:id', (req, res) => {
+  const used = db
+    .prepare('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?')
+    .get(req.params.id);
+  if (used.n > 0) {
+    return res.status(409).json({ error: 'category is used by transactions' });
+  }
   const info = db.prepare('DELETE FROM categories WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
@@ -69,6 +75,9 @@ app.post('/api/transactions', (req, res) => {
   if (!['income', 'expense'].includes(type)) {
     return res.status(400).json({ error: 'type must be income or expense' });
   }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  }
   if (category_id != null) {
     const cat = db.prepare('SELECT id FROM categories WHERE id = ?').get(category_id);
     if (!cat) return res.status(400).json({ error: 'invalid category_id' });
@@ -92,6 +101,15 @@ app.put('/api/transactions/:id', (req, res) => {
   const { amount, date, type, category_id, note } = req.body;
   const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
+  if (amount !== undefined && (typeof amount !== 'number' || amount <= 0)) {
+    return res.status(400).json({ error: 'amount must be a positive number' });
+  }
+  if (type !== undefined && !['income', 'expense'].includes(type)) {
+    return res.status(400).json({ error: 'type must be income or expense' });
+  }
+  if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  }
   const updated = {
     amount: amount ?? existing.amount,
     date: date ?? existing.date,
@@ -134,6 +152,12 @@ app.post('/api/budgets', (req, res) => {
   if (!category_id || !month || limit_amount == null) {
     return res.status(400).json({ error: 'category_id, month and limit_amount are required' });
   }
+  if (typeof limit_amount !== 'number' || limit_amount <= 0) {
+    return res.status(400).json({ error: 'limit_amount must be a positive number' });
+  }
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    return res.status(400).json({ error: 'month must be YYYY-MM' });
+  }
   const cat = db.prepare('SELECT id FROM categories WHERE id = ?').get(category_id);
   if (!cat) return res.status(400).json({ error: 'invalid category_id' });
   db.prepare(
@@ -147,6 +171,15 @@ app.delete('/api/budgets/:id', (req, res) => {
   const info = db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
+});
+
+app.use((req, res) => {
+  res.status(404).json({ error: 'not found' });
+});
+
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ error: 'internal server error' });
 });
 
 app.listen(PORT, () => {

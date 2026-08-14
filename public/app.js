@@ -34,7 +34,7 @@ function customSelect(selectEl) {
       trigger.innerHTML = '<span class="cs-trigger-label"></span><span class="cs-arrow">▾</span>';
       return;
     }
-    const icon = opt.dataset.icon ? `<span class="cs-opt-icon">${opt.dataset.icon}</span>` : '';
+    const icon = opt.dataset.icon ? `<span class="cs-opt-icon">${escapeHtml(opt.dataset.icon)}</span>` : '';
     trigger.innerHTML = `${icon}<span class="cs-trigger-label"></span><span class="cs-arrow">▾</span>`;
     trigger.querySelector('.cs-trigger-label').textContent = opt.textContent;
   }
@@ -45,7 +45,7 @@ function customSelect(selectEl) {
       const item = document.createElement('button');
       item.type = 'button';
       item.className = 'cs-option';
-      item.innerHTML = `<span class="cs-opt-icon">${opt.dataset.icon || ''}</span><span></span>`;
+      item.innerHTML = `<span class="cs-opt-icon">${escapeHtml(opt.dataset.icon) || ''}</span><span></span>`;
       item.querySelector('span:last-child').textContent = opt.textContent;
       item.addEventListener('click', () => {
         selectEl.value = opt.value;
@@ -108,7 +108,7 @@ async function loadCategories() {
   const catSel = $('#t-category');
   catSel.innerHTML = state.categories
     .filter((c) => c.type === type)
-    .map((c) => `<option value="${c.id}" data-icon="${c.icon}">${c.name}</option>`)
+    .map((c) => `<option value="${c.id}" data-icon="${escapeHtml(c.icon)}">${escapeHtml(c.name)}</option>`)
     .join('');
   if (categoryDropdown) categoryDropdown.refresh();
 }
@@ -144,9 +144,9 @@ function renderTransactions() {
     item.className = 'tx-item';
     item.style.borderLeftColor = color;
     item.innerHTML = `
-      <span class="icon" style="background:${color}22;border-radius:8px;padding:4px 8px">${t.category_icon || (t.type === 'income' ? '💵' : '💸')}</span>
+      <span class="icon" style="background:${color}22;border-radius:8px;padding:4px 8px">${escapeHtml(t.category_icon) || (t.type === 'income' ? '💵' : '💸')}</span>
       <div class="info">
-        <div class="name">${t.category_name || 'Uncategorized'}${t.note ? ' — ' + escapeHtml(t.note) : ''}</div>
+        <div class="name">${escapeHtml(t.category_name) || 'Uncategorized'}${t.note ? ' — ' + escapeHtml(t.note) : ''}</div>
         <div class="meta">${t.date}</div>
       </div>
       <span class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${money(t.amount)}</span>
@@ -158,8 +158,9 @@ function renderTransactions() {
 }
 
 function escapeHtml(str) {
+  if (str == null) return '';
   const div = document.createElement('div');
-  div.textContent = str;
+  div.textContent = String(str);
   return div.innerHTML;
 }
 
@@ -171,19 +172,25 @@ async function deleteTransaction(id) {
 async function loadBudgets() {
   const budgets = await api(`/api/budgets?month=${state.month}`);
   const container = $('#budgets');
-  container.innerHTML = '<h2>Budget Planner</h2>';
+  container.innerHTML = '';
 
   const form = document.createElement('div');
-  form.className = 'budget-row';
+  form.className = 'budget-form';
   form.innerHTML = `
-    <div class="budget-select-wrap"><select id="b-category"></select></div>
-    <input type="number" id="b-limit" step="0.01" min="0.01" placeholder="Limit amount">
-    <button id="b-add">Set Budget</button>
+    <div class="field">
+      <label for="b-category">Category</label>
+      <select id="b-category"></select>
+    </div>
+    <div class="field">
+      <label for="b-limit">Monthly Limit</label>
+      <input type="number" id="b-limit" step="1" min="1" placeholder="0.00">
+    </div>
+    <button id="b-add" type="button">Set Budget</button>
   `;
   const sel = form.querySelector('#b-category');
   sel.innerHTML = state.categories
     .filter((c) => c.type === 'expense')
-    .map((c) => `<option value="${c.id}" data-icon="${c.icon}">${c.name}</option>`)
+    .map((c) => `<option value="${c.id}" data-icon="${escapeHtml(c.icon)}">${escapeHtml(c.name)}</option>`)
     .join('');
   const budgetDropdown = customSelect(sel);
   form.querySelector('#b-add').addEventListener('click', async () => {
@@ -214,7 +221,7 @@ async function loadBudgets() {
     const card = document.createElement('div');
     card.className = 'budget-card';
     card.innerHTML = `
-      <span style="font-weight:600;color:${color}">${b.category_icon} ${b.category_name}</span>
+      <span style="font-weight:600;color:${color}">${escapeHtml(b.category_icon)} ${escapeHtml(b.category_name)}</span>
       <div class="budget-bar"><div class="fill ${over ? 'over' : ''}" style="width:${pct}%;background:${over ? '#ff6b7a' : color}"></div></div>
       <span class="spent ${over ? 'over' : 'ok'}">${money(s)}</span>
       <span class="limit">/ ${money(b.limit_amount)}</span>
