@@ -1,6 +1,9 @@
 const express = require('express');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const crypto = require('node:crypto');
+const { execFile } = require('node:child_process');
 const db = require('./db');
 
 const app = express();
@@ -47,7 +50,7 @@ function requireAuth(req, res, next) {
   next();
 }
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/health', (req, res) => {
@@ -340,6 +343,34 @@ app.delete('/api/budgets/:id', requireAuth, (req, res) => {
   const info = db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
+});
+
+app.post('/api/import/pdf', requireAuth, (req, res) => {
+  const { data } = req.body;
+  if (typeof data !== 'string') {
+    return res.status(400).json({ error: 'base64 PDF data is required' });
+  }
+  let buf;
+  try {
+    buf = Buffer.from(data, 'base64');
+  } catch {
+    return res.status(400).json({ error: 'invalid base64 data' });
+  }
+  if (buf.length === 0 || buf.length > 10 * 1024 * 1024) {
+    return res.status(400).json({ error: 'PDF must be between 1 byte and 10MB' });
+  }
+  if (buf.slice(0, 5).toString('latin1') !== '%PDF-') {
+    return res.status(400).json({ error: 'file is not a valid PDF' });
+  }
+  const tmpPdf = path.join(os.tmpdir(), `momo_${crypto.randomBytes(8).toString('hex')}.pdf`);
+  fs.writeFileSync(tmpPdf, buf);
+  execFile('pdftotext', ['-layout', tmpPdf, '-'], { timeout: 15000 }, (err, stdout, stderr) => {
+    fs.unlink(tmpPdf, () => {});
+    if (err) {
+      return res.status(500).json({ error: 'could not extract text from PDF: ' + (stderr || err.message) });
+    }
+    res.json({ text: stdout });
+  });
 });
 
 app.use((req, res) => {

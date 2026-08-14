@@ -914,78 +914,98 @@ function renderImportCard() {
     <h3>Import transactions</h3>
 
     <div class="imp-mtn">
-      <h4>MTN MoMo statement</h4>
-      <p class="muted">Paste the text of your MTN MoMo statement (open the PDF and copy the text, or run pdftotext) and it will be parsed automatically.</p>
+      <h4>MTN MoMo statement (PDF)</h4>
+      <p class="muted">Upload your MoMo statement PDF and it will be read and parsed automatically.</p>
       <div class="field">
-        <label for="imp-mtn-text">Paste MTN statement text</label>
-        <textarea id="imp-mtn-text" rows="8" placeholder="MOBILE MONEY TRANSACTION HISTORY&#10;...&#10;13-Aug-2026 05:18:48 PM ... TRANSFER 30.5 ..."></textarea>
+        <label for="imp-mtn-file">Choose PDF file</label>
+        <input type="file" id="imp-mtn-file" accept=".pdf,application/pdf">
       </div>
-      <button type="button" id="imp-mtn-run" class="btn-primary">Parse MTN statement</button>
-      <div id="imp-mtn-result"></div>
+      <div id="imp-mtn-result"><p class="muted">No file selected.</p></div>
     </div>
 
     <hr class="imp-divider">
 
     <h4>Generic CSV</h4>
-    <p class="muted">Upload any CSV or paste its text, then map the columns.</p>
+    <p class="muted">Upload a CSV file, then map the columns.</p>
     <div class="field">
-      <label for="imp-file">Upload CSV file</label>
+      <label for="imp-file">Choose CSV file</label>
       <input type="file" id="imp-file" accept=".csv,text/csv">
     </div>
-    <div class="field">
-      <label for="imp-text">Or paste CSV text</label>
-      <textarea id="imp-text" rows="6" placeholder="date,description,amount"></textarea>
-    </div>
-    <button type="button" id="imp-parse" class="btn-primary">Parse CSV</button>
     <div id="imp-result"></div>
   `;
+
+  card.querySelector('#imp-mtn-file').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    const result = card.querySelector('#imp-mtn-result');
+    if (!file) return;
+    result.innerHTML = '<p class="muted">Reading PDF...</p>';
+    try {
+      const base64 = await fileToBase64(file);
+      const conv = await api('/api/import/pdf', { method: 'POST', body: JSON.stringify({ data: base64 }) });
+      const rows = parseMTNStatement(conv.text);
+      if (!rows.length) {
+        result.innerHTML = '<p class="error">No MTN transaction rows detected in this PDF. Make sure it is your MoMo statement.</p>';
+        return;
+      }
+      const preview = rows.slice(0, 6).map((r) => `<tr><td>${escapeHtml(r.date)}</td><td>${r.type === 'income' ? '+' : '-'}${escapeHtml(String(r.amount))}</td><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.note)}</td></tr>`).join('');
+      result.innerHTML = `
+        <p class="muted">Detected ${rows.length} transactions. Preview:</p>
+        <div class="imp-preview"><table class="imp-table"><tr><th>Date</th><th>Amount</th><th>Type</th><th>Note</th></tr>${preview}</table></div>
+        <div class="btn-row"><button type="button" id="imp-mtn-confirm" class="btn-primary">Import ${rows.length} transactions</button><span id="imp-mtn-msg" class="muted"></span></div>
+      `;
+      result.querySelector('#imp-mtn-confirm').addEventListener('click', async () => {
+        const msg = result.querySelector('#imp-mtn-msg');
+        msg.textContent = 'Importing...';
+        try {
+          const res = await api('/api/transactions/import', { method: 'POST', body: JSON.stringify({ rows }) });
+          msg.textContent = '';
+          alert(`Imported ${res.inserted} transactions (${res.skipped} skipped).`);
+          result.innerHTML = '<p class="muted">Done.</p>';
+          card.querySelector('#imp-mtn-file').value = '';
+        } catch (err) {
+          msg.textContent = '';
+          alert(err.message);
+        }
+      });
+    } catch (err) {
+      result.innerHTML = `<p class="error">${escapeHtml(err.message)}</p>`;
+    }
+  });
+
   card.querySelector('#imp-file').addEventListener('change', (e) => {
     const file = e.target.files[0];
+    const result = card.querySelector('#imp-result');
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => { card.querySelector('#imp-text').value = reader.result; };
+    reader.onload = () => {
+      const text = reader.result;
+      const rows = parseCSV(text);
+      if (rows.length < 1) {
+        result.innerHTML = '<p class="error">No rows found in this CSV.</p>';
+        return;
+      }
+      buildMappingUI(result, rows);
+    };
     reader.readAsText(file);
   });
-  card.querySelector('#imp-parse').addEventListener('click', () => {
-    const text = card.querySelector('#imp-text').value;
-    const result = card.querySelector('#imp-result');
-    const rows = parseCSV(text);
-    if (rows.length < 1) {
-      result.innerHTML = '<p class="error">No rows found in the pasted text.</p>';
-      return;
-    }
-    buildMappingUI(result, rows);
-  });
-  card.querySelector('#imp-mtn-run').addEventListener('click', async () => {
-    const text = card.querySelector('#imp-mtn-text').value;
-    const result = card.querySelector('#imp-mtn-result');
-    const rows = parseMTNStatement(text);
-    if (!rows.length) {
-      result.innerHTML = '<p class="error">No MTN transaction rows detected. Make sure you pasted the statement text with the "13-Aug-2026 ..." rows.</p>';
-      return;
-    }
-    const preview = rows.slice(0, 6).map((r) => `<tr><td>${escapeHtml(r.date)}</td><td>${r.type === 'income' ? '+' : '-'}${escapeHtml(String(r.amount))}</td><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.note)}</td></tr>`).join('');
-    result.innerHTML = `
-      <p class="muted">Detected ${rows.length} transactions. Preview:</p>
-      <div class="imp-preview"><table class="imp-table"><tr><th>Date</th><th>Amount</th><th>Type</th><th>Note</th></tr>${preview}</table></div>
-      <div class="btn-row"><button type="button" id="imp-mtn-confirm" class="btn-primary">Import ${rows.length} transactions</button><span id="imp-mtn-msg" class="muted"></span></div>
-    `;
-    result.querySelector('#imp-mtn-confirm').addEventListener('click', async () => {
-      const msg = result.querySelector('#imp-mtn-msg');
-      msg.textContent = 'Importing...';
-      try {
-        const res = await api('/api/transactions/import', { method: 'POST', body: JSON.stringify({ rows }) });
-        msg.textContent = '';
-        alert(`Imported ${res.inserted} transactions (${res.skipped} skipped).`);
-        result.innerHTML = '<p class="muted">Done.</p>';
-        card.querySelector('#imp-mtn-text').value = '';
-      } catch (err) {
-        msg.textContent = '';
-        alert(err.message);
-      }
-    });
-  });
   return card;
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === 'string') {
+        const base64 = result.slice(result.indexOf(',') + 1);
+        resolve(base64);
+      } else {
+        reject(new Error('could not read file'));
+      }
+    };
+    reader.onerror = () => reject(new Error('could not read file'));
+    reader.readAsDataURL(file);
+  });
 }
 
 function buildMappingUI(container, rows) {

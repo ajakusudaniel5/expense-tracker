@@ -3,3 +3,4 @@ data/
 config/imap.json
 downloads/
 *.pdf
+momo_extracted.txt
