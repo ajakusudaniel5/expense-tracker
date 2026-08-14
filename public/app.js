@@ -4,10 +4,77 @@ const state = {
   transactions: [],
 };
 
+let categoryDropdown = null;
+
 const CAT_COLORS = ['#7c6cf0', '#34d399', '#ff6b7a', '#fbbf24', '#60a5fa', '#f472b6', '#a3e635', '#22d3ee', '#fb923c', '#c084fc'];
 
 function catColor(id) {
   return CAT_COLORS[Number(id) % CAT_COLORS.length];
+}
+
+function customSelect(selectEl) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'custom-select';
+  selectEl.parentNode.insertBefore(wrapper, selectEl);
+  wrapper.appendChild(selectEl);
+  selectEl.classList.add('hidden-select');
+
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'cs-trigger';
+  wrapper.appendChild(trigger);
+
+  const list = document.createElement('div');
+  list.className = 'cs-list';
+  wrapper.appendChild(list);
+
+  function renderTrigger() {
+    const opt = selectEl.options[selectEl.selectedIndex];
+    if (!opt) {
+      trigger.innerHTML = '<span class="cs-trigger-label"></span><span class="cs-arrow">▾</span>';
+      return;
+    }
+    const icon = opt.dataset.icon ? `<span class="cs-opt-icon">${opt.dataset.icon}</span>` : '';
+    trigger.innerHTML = `${icon}<span class="cs-trigger-label"></span><span class="cs-arrow">▾</span>`;
+    trigger.querySelector('.cs-trigger-label').textContent = opt.textContent;
+  }
+
+  function buildOptions() {
+    list.innerHTML = '';
+    [...selectEl.options].forEach((opt) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'cs-option';
+      item.innerHTML = `<span class="cs-opt-icon">${opt.dataset.icon || ''}</span><span></span>`;
+      item.querySelector('span:last-child').textContent = opt.textContent;
+      item.addEventListener('click', () => {
+        selectEl.value = opt.value;
+        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
+        closeList();
+      });
+      list.appendChild(item);
+    });
+  }
+
+  function openList() { wrapper.classList.add('open'); }
+  function closeList() { wrapper.classList.remove('open'); }
+
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    wrapper.classList.contains('open') ? closeList() : openList();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!wrapper.contains(e.target)) closeList();
+  });
+
+  function refresh() {
+    buildOptions();
+    renderTrigger();
+  }
+
+  refresh();
+  return { refresh, closeList };
 }
 
 const $ = (sel) => document.querySelector(sel);
@@ -41,8 +108,9 @@ async function loadCategories() {
   const catSel = $('#t-category');
   catSel.innerHTML = state.categories
     .filter((c) => c.type === type)
-    .map((c) => `<option value="${c.id}">${c.icon} ${c.name}</option>`)
+    .map((c) => `<option value="${c.id}" data-icon="${c.icon}">${c.name}</option>`)
     .join('');
+  if (categoryDropdown) categoryDropdown.refresh();
 }
 
 async function loadTransactions() {
@@ -108,15 +176,16 @@ async function loadBudgets() {
   const form = document.createElement('div');
   form.className = 'budget-row';
   form.innerHTML = `
-    <select id="b-category"></select>
+    <div class="budget-select-wrap"><select id="b-category"></select></div>
     <input type="number" id="b-limit" step="0.01" min="0.01" placeholder="Limit amount">
     <button id="b-add">Set Budget</button>
   `;
   const sel = form.querySelector('#b-category');
   sel.innerHTML = state.categories
     .filter((c) => c.type === 'expense')
-    .map((c) => `<option value="${c.id}">${c.icon} ${c.name}</option>`)
+    .map((c) => `<option value="${c.id}" data-icon="${c.icon}">${c.name}</option>`)
     .join('');
+  const budgetDropdown = customSelect(sel);
   form.querySelector('#b-add').addEventListener('click', async () => {
     const limit = parseFloat(form.querySelector('#b-limit').value);
     if (!limit || limit <= 0) return alert('Enter a valid limit');
@@ -167,6 +236,11 @@ function switchTab(name) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  const typeDropdown = customSelect($('#t-type'));
+  categoryDropdown = customSelect($('#t-category'));
+  typeDropdown.closeList();
+  categoryDropdown.closeList();
+
   $('#month').value = state.month;
   $('#month').addEventListener('change', (e) => {
     state.month = e.target.value;
