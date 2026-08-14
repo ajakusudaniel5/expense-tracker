@@ -1106,6 +1106,15 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#lock-pin').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') tryUnlock();
   });
+  let lockDebounce = null;
+  $('#lock-pin').addEventListener('input', () => {
+    const len = $('#lock-pin').value.trim().length;
+    if (len < 4) return;
+    clearTimeout(lockDebounce);
+    lockDebounce = setTimeout(() => {
+      if ($('#lock-pin').value.trim().length >= 4) tryUnlock();
+    }, 300);
+  });
   $('#setup-run').addEventListener('click', setupPin);
   $('#setup-pin2').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') setupPin();
