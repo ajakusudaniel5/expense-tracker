@@ -1,9 +1,51 @@
 const express = require('express');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+const SESSIONS = new Map();
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function hashPin(pin, salt) {
+  return crypto.createHash('sha256').update(salt + ':' + pin).digest('hex');
+}
+
+function newSalt() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function getPinRow() {
+  return db.prepare("SELECT value FROM settings WHERE key = 'pin_hash'").get();
+}
+
+function getSaltRow() {
+  return db.prepare("SELECT value FROM settings WHERE key = 'pin_salt'").get();
+}
+
+function pinEnabled() {
+  const row = getPinRow();
+  return !!(row && row.value);
+}
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function requireAuth(req, res, next) {
+  if (!pinEnabled()) return next();
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'unlocked required' });
+  const session = SESSIONS.get(token);
+  if (!session || session.expires < Date.now()) {
+    if (session) SESSIONS.delete(token);
+    return res.status(401).json({ error: 'unlocked required' });
+  }
+  next();
+}
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -12,12 +54,78 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', db: db.isOpen ? 'connected' : 'error' });
 });
 
-app.get('/api/categories', (req, res) => {
+app.get('/api/pin/status', (req, res) => {
+  res.json({ enabled: pinEnabled() });
+});
+
+app.post('/api/pin/set', (req, res) => {
+  const { pin } = req.body;
+  if (typeof pin !== 'string' || !/^\d{4,8}$/.test(pin)) {
+    return res.status(400).json({ error: 'PIN must be 4-8 digits' });
+  }
+  if (pinEnabled()) {
+    return res.status(409).json({ error: 'a PIN is already set' });
+  }
+  const salt = newSalt();
+  db.prepare(
+    "INSERT INTO settings (key, value) VALUES ('pin_hash', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+  ).run(hashPin(pin, salt));
+  db.prepare(
+    "INSERT INTO settings (key, value) VALUES ('pin_salt', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
+  ).run(salt);
+  res.status(201).json({ enabled: true });
+});
+
+app.post('/api/pin/verify', (req, res) => {
+  const { pin } = req.body;
+  if (!pinEnabled()) return res.status(400).json({ error: 'no PIN is set' });
+  if (typeof pin !== 'string' || !pin) {
+    return res.status(400).json({ error: 'pin is required' });
+  }
+  const salt = getSaltRow().value;
+  const expected = getPinRow().value;
+  if (hashPin(pin, salt) !== expected) {
+    return res.status(401).json({ error: 'incorrect PIN' });
+  }
+  const token = generateToken();
+  SESSIONS.set(token, { expires: Date.now() + SESSION_TTL_MS });
+  res.json({ token });
+});
+
+app.post('/api/pin/change', requireAuth, (req, res) => {
+  const { current_pin, new_pin } = req.body;
+  if (!pinEnabled()) return res.status(400).json({ error: 'no PIN is set' });
+  if (typeof new_pin !== 'string' || !/^\d{4,8}$/.test(new_pin)) {
+    return res.status(400).json({ error: 'PIN must be 4-8 digits' });
+  }
+  const salt = getSaltRow().value;
+  const expected = getPinRow().value;
+  if (hashPin(current_pin, salt) !== expected) {
+    return res.status(401).json({ error: 'current PIN is incorrect' });
+  }
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'pin_hash'").run(hashPin(new_pin, salt));
+  res.json({ enabled: true });
+});
+
+app.post('/api/pin/remove', requireAuth, (req, res) => {
+  const { pin } = req.body;
+  if (!pinEnabled()) return res.status(400).json({ error: 'no PIN is set' });
+  const salt = getSaltRow().value;
+  const expected = getPinRow().value;
+  if (hashPin(pin, salt) !== expected) {
+    return res.status(401).json({ error: 'PIN is incorrect' });
+  }
+  db.prepare("DELETE FROM settings WHERE key = 'pin_hash'").run();
+  db.prepare("DELETE FROM settings WHERE key = 'pin_salt'").run();
+  res.json({ enabled: false });
+});
+
+app.get('/api/categories', requireAuth, (req, res) => {
   const rows = db.prepare('SELECT * FROM categories ORDER BY name').all();
   res.json(rows);
 });
 
-app.post('/api/categories', (req, res) => {
+app.post('/api/categories', requireAuth, (req, res) => {
   const { name, type, icon } = req.body;
   if (!name || !type) {
     return res.status(400).json({ error: 'name and type are required' });
@@ -38,7 +146,7 @@ app.post('/api/categories', (req, res) => {
   }
 });
 
-app.delete('/api/categories/:id', (req, res) => {
+app.delete('/api/categories/:id', requireAuth, (req, res) => {
   const used = db
     .prepare('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?')
     .get(req.params.id);
@@ -50,7 +158,7 @@ app.delete('/api/categories/:id', (req, res) => {
   res.status(204).end();
 });
 
-app.put('/api/categories/:id', (req, res) => {
+app.put('/api/categories/:id', requireAuth, (req, res) => {
   const { name, type, icon } = req.body;
   const existing = db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
@@ -81,7 +189,7 @@ app.put('/api/categories/:id', (req, res) => {
   }
 });
 
-app.get('/api/transactions', (req, res) => {
+app.get('/api/transactions', requireAuth, (req, res) => {
   const { month } = req.query;
   let sql =
     'SELECT t.*, c.name AS category_name, c.icon AS category_icon ' +
@@ -95,7 +203,7 @@ app.get('/api/transactions', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-app.post('/api/transactions', (req, res) => {
+app.post('/api/transactions', requireAuth, (req, res) => {
   const { amount, date, type, category_id, note } = req.body;
   if (amount == null || !date || !type) {
     return res.status(400).json({ error: 'amount, date and type are required' });
@@ -128,7 +236,7 @@ app.post('/api/transactions', (req, res) => {
   });
 });
 
-app.put('/api/transactions/:id', (req, res) => {
+app.put('/api/transactions/:id', requireAuth, (req, res) => {
   const { amount, date, type, category_id, note } = req.body;
   const existing = db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
@@ -158,13 +266,13 @@ app.put('/api/transactions/:id', (req, res) => {
   res.json({ id: Number(req.params.id), ...updated });
 });
 
-app.delete('/api/transactions/:id', (req, res) => {
+app.delete('/api/transactions/:id', requireAuth, (req, res) => {
   const info = db.prepare('DELETE FROM transactions WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
 });
 
-app.get('/api/budgets', (req, res) => {
+app.get('/api/budgets', requireAuth, (req, res) => {
   const { month } = req.query;
   let sql =
     'SELECT b.*, c.name AS category_name, c.icon AS category_icon ' +
@@ -178,7 +286,7 @@ app.get('/api/budgets', (req, res) => {
   res.json(db.prepare(sql).all(...params));
 });
 
-app.post('/api/budgets', (req, res) => {
+app.post('/api/budgets', requireAuth, (req, res) => {
   const { category_id, month, limit_amount } = req.body;
   if (!category_id || !month || limit_amount == null) {
     return res.status(400).json({ error: 'category_id, month and limit_amount are required' });
@@ -198,7 +306,7 @@ app.post('/api/budgets', (req, res) => {
   res.status(201).json({ category_id, month, limit_amount });
 });
 
-app.delete('/api/budgets/:id', (req, res) => {
+app.delete('/api/budgets/:id', requireAuth, (req, res) => {
   const info = db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();

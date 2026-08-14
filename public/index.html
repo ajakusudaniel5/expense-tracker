@@ -14,6 +14,8 @@
       <button class="tab" data-tab="reports">Reports</button>
       <button class="tab" data-tab="budgets">Budgets</button>
       <button class="tab" data-tab="categories">Categories</button>
+      <button class="tab" data-tab="settings">Settings</button>
+      <button class="lock-btn" id="lock-btn" title="Lock app" style="display:none">🔒 Lock</button>
     </nav>
   </header>
 
@@ -96,7 +98,23 @@
       <h2>Category Management</h2>
       <div id="categories"></div>
     </section>
+
+    <section id="tab-settings" class="tab-panel">
+      <h2>Settings</h2>
+      <div id="settings"></div>
+    </section>
   </main>
+
+  <div id="lock-screen" class="lock-screen" style="display:none">
+    <div class="lock-box">
+      <div class="lock-icon">🔒</div>
+      <h2>Enter PIN</h2>
+      <p class="muted">Enter your PIN to unlock the app</p>
+      <input type="password" id="lock-pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="••••" autocomplete="off">
+      <button id="lock-unlock" type="button">Unlock</button>
+      <p id="lock-error" class="error" style="display:none"></p>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>

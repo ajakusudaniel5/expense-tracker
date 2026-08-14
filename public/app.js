@@ -89,11 +89,27 @@ function money(n) {
   );
 }
 
+const TOKEN_KEY = 'tracker_token';
+
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY) || '';
+}
+
+function setToken(token) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
 async function api(path, options = {}) {
-  const res = await fetch(path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(path, { ...options, headers });
+  if (res.status === 401) {
+    setToken(null);
+    showLockScreen();
+    throw new Error('App is locked');
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || 'Request failed');
@@ -254,6 +270,7 @@ function switchTab(name) {
   if (name === 'budgets') loadBudgets();
   if (name === 'categories') loadCategoriesPage();
   if (name === 'reports') loadReports();
+  if (name === 'settings') loadSettingsPage();
 }
 
 let lastAlertKey = '';
@@ -648,6 +665,160 @@ function wireSteppers(root = document) {
   });
 }
 
+function showLockScreen() {
+  const screen = $('#lock-screen');
+  const pinInput = $('#lock-pin');
+  const err = $('#lock-error');
+  screen.style.display = 'flex';
+  pinInput.value = '';
+  err.style.display = 'none';
+  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
+  pinInput.focus();
+}
+
+async function tryUnlock() {
+  const pin = $('#lock-pin').value.trim();
+  const err = $('#lock-error');
+  if (!pin) {
+    err.textContent = 'Enter your PIN';
+    err.style.display = 'block';
+    return;
+  }
+  try {
+    const res = await fetch('/api/pin/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      err.textContent = body.error || 'Incorrect PIN';
+      err.style.display = 'block';
+      $('#lock-pin').value = '';
+      $('#lock-pin').focus();
+      return;
+    }
+    setToken(body.token);
+    $('#lock-screen').style.display = 'none';
+    $('#lock-btn').style.display = '';
+    document.querySelector('.tab[data-tab="dashboard"]').click();
+    loadCategories().then(loadTransactions);
+  } catch (e) {
+    err.textContent = 'Something went wrong';
+    err.style.display = 'block';
+  }
+}
+
+function lockNow() {
+  setToken(null);
+  showLockScreen();
+}
+
+async function loadSettingsPage() {
+  const container = $('#settings');
+  container.innerHTML = '<div class="empty">Loading...</div>';
+  let status;
+  try {
+    status = await api('/api/pin/status');
+  } catch (err) {
+    container.innerHTML = '<div class="empty">App is locked.</div>';
+    return;
+  }
+  container.innerHTML = '';
+  const card = document.createElement('div');
+  card.className = 'settings-card';
+  if (status.enabled) {
+    card.innerHTML = `
+      <h3>PIN Lock</h3>
+      <span class="settings-status on">● Enabled</span>
+      <p class="muted">Your app is protected by a PIN. Anyone without the PIN cannot view your data.</p>
+      <div class="field">
+        <label for="s-current">Current PIN</label>
+        <input type="password" id="s-current" inputmode="numeric" maxlength="8" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="s-new">New PIN (4-8 digits)</label>
+        <input type="password" id="s-new" inputmode="numeric" maxlength="8" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="s-confirm">Confirm New PIN</label>
+        <input type="password" id="s-confirm" inputmode="numeric" maxlength="8" autocomplete="off">
+      </div>
+      <div class="btn-row">
+        <button type="button" id="s-change" class="btn-primary">Change PIN</button>
+        <button type="button" id="s-remove" class="btn-danger">Disable PIN</button>
+      </div>
+    `;
+    card.querySelector('#s-change').addEventListener('click', async () => {
+      const cur = card.querySelector('#s-current').value;
+      const next = card.querySelector('#s-new').value;
+      const confirm = card.querySelector('#s-confirm').value;
+      if (!/^\d{4,8}$/.test(next)) return alert('New PIN must be 4-8 digits');
+      if (next !== confirm) return alert('PINs do not match');
+      try {
+        await api('/api/pin/change', {
+          method: 'POST',
+          body: JSON.stringify({ current_pin: cur, new_pin: next }),
+        });
+        alert('PIN changed successfully');
+        await loadSettingsPage();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+    card.querySelector('#s-remove').addEventListener('click', async () => {
+      const cur = card.querySelector('#s-current').value;
+      if (!confirm('Disable PIN protection? Anyone will be able to open the app.')) return;
+      try {
+        await api('/api/pin/remove', {
+          method: 'POST',
+          body: JSON.stringify({ pin: cur }),
+        });
+        setToken(null);
+        $('#lock-btn').style.display = 'none';
+        alert('PIN disabled');
+        await loadSettingsPage();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  } else {
+    card.innerHTML = `
+      <h3>PIN Lock</h3>
+      <span class="settings-status off">● Disabled</span>
+      <p class="muted">Set a PIN to lock the app. You'll be asked for it each time you open the app.</p>
+      <div class="field">
+        <label for="s-pin">New PIN (4-8 digits)</label>
+        <input type="password" id="s-pin" inputmode="numeric" maxlength="8" autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="s-pin2">Confirm PIN</label>
+        <input type="password" id="s-pin2" inputmode="numeric" maxlength="8" autocomplete="off">
+      </div>
+      <button type="button" id="s-enable" class="btn-primary">Enable PIN</button>
+    `;
+    card.querySelector('#s-enable').addEventListener('click', async () => {
+      const pin = card.querySelector('#s-pin').value;
+      const pin2 = card.querySelector('#s-pin2').value;
+      if (!/^\d{4,8}$/.test(pin)) return alert('PIN must be 4-8 digits');
+      if (pin !== pin2) return alert('PINs do not match');
+      try {
+        await api('/api/pin/set', {
+          method: 'POST',
+          body: JSON.stringify({ pin }),
+        });
+        alert('PIN enabled. The app is now locked.');
+        $('#lock-btn').style.display = '';
+        lockNow();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  }
+  container.appendChild(card);
+}
+
+
 document.addEventListener('DOMContentLoaded', () => {
   const typeDropdown = customSelect($('#t-type'));
   categoryDropdown = customSelect($('#t-category'));
@@ -689,5 +860,35 @@ document.addEventListener('DOMContentLoaded', () => {
 
   $('#t-date').value = new Date().toISOString().slice(0, 10);
   wireSteppers();
-  loadCategories().then(loadTransactions);
+
+  $('#lock-btn').addEventListener('click', lockNow);
+  $('#lock-unlock').addEventListener('click', tryUnlock);
+  $('#lock-pin').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') tryUnlock();
+  });
+
+  (async () => {
+    let status = { enabled: false };
+    try {
+      status = await api('/api/pin/status');
+    } catch (e) {
+      return;
+    }
+    if (status.enabled) {
+      $('#lock-btn').style.display = '';
+      if (getToken()) {
+        try {
+          await api('/api/categories');
+          document.querySelector('.tab[data-tab="dashboard"]').click();
+          loadCategories().then(loadTransactions);
+          return;
+        } catch (e) {
+          return;
+        }
+      }
+      showLockScreen();
+    } else {
+      loadCategories().then(loadTransactions);
+    }
+  })();
 });

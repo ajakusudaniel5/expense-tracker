@@ -41,6 +41,11 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS seed_marker (id INTEGER PRIMARY KEY);
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
 `);
 
 const seed = db.prepare('SELECT id FROM seed_marker WHERE id = 1').get();
