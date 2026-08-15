@@ -1,8 +1,5 @@
 node_modules/
 data/
-*.pdf
-momo_extracted.txt
-server.out.log
 .env
 .env.*
 *.log

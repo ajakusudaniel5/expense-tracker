@@ -43,18 +43,6 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function addDaysStr(days) {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
-function fmtDate(str) {
-  if (!str) return '';
-  const d = new Date(str + 'T00:00:00');
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-}
-
 /* ---------------- API ---------------- */
 
 async function api(path, options = {}) {
