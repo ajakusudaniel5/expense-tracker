@@ -933,6 +933,8 @@ app.get('/api/insights', requireAuth, async (req, res) => {
       insights.push({ icon: '📈', tone: 'warn', text: `You spent ${req.user.currency}${(thisTotal - lastTotal).toFixed(2)} more this week than last week.` });
     } else if (lastTotal > thisTotal && lastTotal > 0) {
       insights.push({ icon: '🟢', tone: 'good', text: `Nice work — you spent ${req.user.currency}${(lastTotal - thisTotal).toFixed(2)} less this week than last week.` });
+    } else if (thisTotal > 0) {
+      insights.push({ icon: '🛒', tone: 'neutral', text: `You've spent ${req.user.currency}${thisTotal.toFixed(2)} on expenses so far this week.` });
     }
   }
 
@@ -944,6 +946,20 @@ app.get('/api/insights', requireAuth, async (req, res) => {
       insights.push({ icon: '🟡', tone: 'warn', text: 'You’re spending faster than planned this period.' });
     } else if (status.tone === 'red') {
       insights.push({ icon: '🔴', tone: 'danger', text: 'Your current spending rate may cause you to run out before this period ends.' });
+    }
+  }
+
+  if (insights.length === 0) {
+    const expenses = tx.filter((t) => t.type === 'expense');
+    const income = tx.filter((t) => t.type === 'income');
+    const totalSpent = expenses.reduce((s, t) => s + t.amount, 0);
+    const totalIncome = income.reduce((s, t) => s + t.amount, 0);
+    if (expenses.length === 0 && income.length > 0) {
+      insights.push({ icon: '🌱', tone: 'neutral', text: 'You have income recorded but no expenses yet. Add your spending to unlock useful patterns.' });
+    } else if (totalSpent > 0) {
+      insights.push({ icon: '🧾', tone: 'neutral', text: `You've spent ${req.user.currency}${totalSpent.toFixed(2)} across ${expenses.length} expense${expenses.length === 1 ? '' : 's'} so far.` });
+    } else {
+      insights.push({ icon: '👋', tone: 'neutral', text: 'Add your income to get started and see how your money is doing.' });
     }
   }
 
