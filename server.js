@@ -234,6 +234,7 @@ app.delete('/api/auth/account', requireAuth, async (req, res) => {
   if (!verifyPassword(password, row.password_hash)) {
     return res.status(401).json({ error: 'Current password is incorrect' });
   }
+  const email = String(req.user.email || '').toLowerCase();
   await db.client.execute('BEGIN');
   try {
     await db.prepare('DELETE FROM transactions WHERE user_id = ?').run(req.user.id);
@@ -248,6 +249,13 @@ app.delete('/api/auth/account', requireAuth, async (req, res) => {
   }
   for (const [token, session] of SESSIONS) {
     if (session.userId === req.user.id) SESSIONS.delete(token);
+  }
+  LOGIN_ATTEMPTS.delete(email);
+  try {
+    await db.client.execute('VACUUM');
+  } catch (_) {
+    // VACUUM is best-effort (some hosted/libsql setups disallow it); logical
+    // deletion above already removes every row belonging to the account.
   }
   res.status(204).end();
 });
