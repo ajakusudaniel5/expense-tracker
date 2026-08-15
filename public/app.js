@@ -1020,7 +1020,7 @@ async function loadSettings() {
   } catch (err) { /* ok */ }
   state.categories = cats;
   page.innerHTML = '';
-  page.appendChild(pageHead('Settings'));
+  page.appendChild(pageHead('Profile'));
   page.appendChild(renderProfileCard());
   page.appendChild(renderCategoriesCard(cats));
   page.appendChild(renderAccountCard());
@@ -1031,7 +1031,7 @@ function renderProfileCard() {
   card.className = 'card section-card';
   const cur = (state.user && state.user.currency) || 'GH₵';
   card.innerHTML = `
-    <div class="section-head"><h2>My profile</h2></div>
+    <div class="section-head"><h2>Profile details</h2></div>
     <div class="field"><label for="p-name">Name</label><input type="text" id="p-name" value="${escapeHtml((state.user && state.user.name) || '')}" placeholder="Your name"></div>
     <div class="field"><label for="p-email">Email</label><input type="email" id="p-email" value="${escapeHtml((state.user && state.user.email) || '')}" disabled></div>
     <div class="field"><label for="p-currency">Currency</label>
