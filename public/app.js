@@ -698,7 +698,7 @@ function renderBudget(page) {
     <div class="section-head"><h2>Set a category budget</h2></div>
     <div class="budget-form">
       <div class="field"><label>Category</label><select id="budget-cat"></select></div>
-      <div class="field"><label>Amount</label><input type="number" id="budget-amount" step="1" min="1" placeholder="0.00"></div>
+      <div class="field"><label>Amount</label><input type="number" id="budget-amount" step="0.01" min="0.01" placeholder="0.00"></div>
       <button type="button" class="btn-primary" id="budget-add">Set budget</button>
     </div>
     <p class="form-error" id="budget-msg" style="display:none"></p>
@@ -769,8 +769,8 @@ function renderBudget(page) {
         const valEl = row.querySelector('.glance-val');
         const input = document.createElement('input');
         input.type = 'number';
-        input.step = '1';
-        input.min = '1';
+        input.step = '0.01';
+        input.min = '0.01';
         input.value = cb.amount;
         input.className = 'limit-edit';
         valEl.replaceWith(input);
