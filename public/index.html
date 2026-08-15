@@ -76,7 +76,7 @@
       <section id="page-settings" class="page"></section>
     </main>
 
-    <button type="button" class="fab" id="fab" aria-label="Add expense">+</button>
+    <button type="button" class="fab" id="fab" aria-label="Add transaction">+</button>
 
     <nav class="bottomnav">
       <button class="bn-item active" data-tab="home"><span class="bn-icon">🏠</span><span>Home</span></button>
@@ -108,19 +108,37 @@
           <input type="date" id="in-date" required>
         </div>
         <div class="field">
-          <label>Make this money last…</label>
+          <label for="in-note">Note <span class="muted">(optional)</span></label>
+          <input type="text" id="in-note" placeholder="e.g. Salary, gift, side hustle">
+        </div>
+        <div class="field">
+          <label>How long should this money last?</label>
           <div class="chip-row" id="in-period-chips">
             <button type="button" class="chip" data-days="7">7 days</button>
             <button type="button" class="chip" data-days="14">14 days</button>
             <button type="button" class="chip" data-days="30">30 days</button>
             <button type="button" class="chip" data-days="0">Until a date</button>
-            <button type="button" class="chip" data-days="-1">No period</button>
+            <button type="button" class="chip" data-days="-1">No end date</button>
           </div>
           <input type="date" id="in-end-date" style="display:none" min="">
         </div>
         <button type="submit" class="btn-primary btn-block">Add income</button>
         <p id="income-msg" class="form-error" style="display:none"></p>
       </form>
+    </div>
+  </div>
+
+  <!-- Transaction type selector modal -->
+  <div id="tx-type-modal" class="modal" style="display:none">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>What do you want to add?</h2>
+        <button type="button" class="modal-close" data-close="tx-type-modal">&times;</button>
+      </div>
+      <div class="tx-type-options">
+        <button type="button" class="tx-type-btn income" id="tx-type-income">+ Income</button>
+        <button type="button" class="tx-type-btn expense" id="tx-type-expense">− Expense</button>
+      </div>
     </div>
   </div>
 

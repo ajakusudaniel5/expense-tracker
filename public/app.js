@@ -270,14 +270,22 @@ function renderHome(page) {
       <div class="hero-tone">${tone === 'green' ? '🟢' : tone === 'yellow' ? '🟡' : '🔴'}</div>
       <div class="hero-title">${escapeHtml(o.status.title)}</div>
       <div class="hero-safe">${money(o.safePerDay)}</div>
-      <div class="hero-safe-label">Safe to spend today</div>
+      <div class="hero-safe-label">Daily amount available</div>
+      <div class="hero-sub">Based on your current money and ${o.daysRemaining} ${o.daysRemaining === 1 ? 'day' : 'days'} remaining.</div>
       <div class="hero-msg">${escapeHtml(o.status.message)}</div>
+    `;
+  } else if (o.hasTransactions) {
+    hero.innerHTML = `
+      <div class="hero-tone">🎯</div>
+      <div class="hero-title">Set a budget period to see your daily amount.</div>
+      <div class="hero-msg">Add your most recent income and pick how long it should last.</div>
+      <button type="button" class="btn-primary hero-cta" id="hero-add-income">+ Add income</button>
     `;
   } else {
     hero.innerHTML = `
-      <div class="hero-tone">👋</div>
-      <div class="hero-title">Let’s get your money set up.</div>
-      <div class="hero-msg">Add the money you have so we can tell you how much you can safely spend.</div>
+      <div class="hero-tone">🙌</div>
+      <div class="hero-title">Let’s get your money under control.</div>
+      <div class="hero-msg">Start by adding the money you currently have or recently received.</div>
       <button type="button" class="btn-primary hero-cta" id="hero-add-income">+ Add income</button>
     `;
   }
@@ -293,7 +301,7 @@ function renderHome(page) {
       chip('Spent', money(o.totalExpense), 'expense') +
       chip('Days left', o.daysRemaining, '') +
       chip('Spending pace', `${money(o.safePerDay)}/day`, '');
-  } else {
+  } else if (o.hasTransactions) {
     chips.innerHTML =
       chip('Income', money(o.totalIncome), 'income') +
       chip('Spent', money(o.totalExpense), 'expense') +
@@ -361,7 +369,7 @@ async function loadInsightTeasers() {
   try {
     const list = await api('/api/insights');
     if (!list.length) {
-      box.innerHTML = `<div class="empty">Insights will appear here as you use the app.</div>`;
+      box.innerHTML = `<div class="empty">Your insights are coming. Keep adding income and expenses and we’ll start finding useful patterns.</div>`;
       return;
     }
     box.innerHTML = list.slice(0, 3).map((i) => `
@@ -431,7 +439,14 @@ function renderTransactions(page) {
   if (!list.length) {
     const empty = document.createElement('div');
     empty.className = 'empty';
-    empty.textContent = 'No transactions yet. Add your first expense or income.';
+    empty.innerHTML = `<p>No transactions yet.</p><p>Add your first income or expense to start tracking your money.</p>`;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-primary';
+    btn.textContent = '+ Add transaction';
+    btn.style.marginTop = '14px';
+    btn.addEventListener('click', openTxTypeModal);
+    empty.appendChild(btn);
     page.appendChild(empty);
     return;
   }
@@ -465,10 +480,12 @@ async function deleteTransaction(t) {
   if (!confirm(`Delete this ${t.type} of ${money(t.amount)}?`)) return;
   try {
     await api(`/api/transactions/${t.id}`, { method: 'DELETE' });
+    state.overview = null;
     showToast('Deleted.', 'good');
     loadTransactions();
     if (state.tab === 'home') loadHome();
     if (state.tab === 'budget') loadBudget();
+    if (state.tab === 'insights') loadInsights();
   } catch (err) {
     showToast(err.message, 'danger');
   }
@@ -493,6 +510,7 @@ function openIncomeModal(editing) {
   $('#income-modal h2').textContent = isEdit ? 'Edit income' : 'Add income';
   $('#in-amount').value = isEdit ? editing.amount : '';
   $('#in-date').value = isEdit ? editing.date : todayStr();
+  $('#in-note').value = isEdit ? editing.note || '' : '';
   $('#in-end-date').style.display = 'none';
   incomePeriod = { kind: 'days', days: 7 };
   const sel = $('#in-source');
@@ -522,14 +540,14 @@ async function submitIncome(e) {
   const date = $('#in-date').value;
   const catVal = $('#in-source').value;
   const category_id = catVal ? Number(catVal) : null;
-  if (!amount || amount <= 0) { msg.textContent = 'Enter an amount'; msg.style.display = 'block'; return; }
+  if (!amount || amount <= 0) { msg.textContent = 'Please enter an amount.'; msg.style.display = 'block'; return; }
 
   const editing = state.editing && state.editing.type === 'income';
   if (editing) {
     try {
       await api(`/api/transactions/${state.editing.id}`, {
         method: 'PUT',
-        body: JSON.stringify({ amount, date, category_id, type: 'income' }),
+        body: JSON.stringify({ amount, date, category_id, type: 'income', note: $('#in-note').value.trim() || null }),
       });
       closeModal('income-modal');
       showToast('Income updated.', 'good');
@@ -537,6 +555,7 @@ async function submitIncome(e) {
       loadHome();
       if (state.tab === 'budget') loadBudget();
       if (state.tab === 'transactions') loadTransactions();
+      if (state.tab === 'insights') loadInsights();
     } catch (err) {
       msg.textContent = err.message;
       msg.style.display = 'block';
@@ -544,7 +563,7 @@ async function submitIncome(e) {
     return;
   }
 
-  const body = { amount, date, category_id };
+  const body = { amount, date, category_id, note: $('#in-note').value.trim() || null };
   if (incomePeriod.kind === 'days' && incomePeriod.days > 0) body.period_days = incomePeriod.days;
   else if (incomePeriod.kind === 'date') {
     const end = $('#in-end-date').value;
@@ -559,6 +578,7 @@ async function submitIncome(e) {
     loadHome();
     if (state.tab === 'budget') loadBudget();
     if (state.tab === 'transactions') loadTransactions();
+    if (state.tab === 'insights') loadInsights();
   } catch (err) {
     msg.textContent = err.message;
     msg.style.display = 'block';
@@ -566,6 +586,11 @@ async function submitIncome(e) {
 }
 
 /* ---------------- Expense modal ---------------- */
+
+function openTxTypeModal() {
+  state.editing = null;
+  $('#tx-type-modal').style.display = 'flex';
+}
 
 function openExpenseModal() {
   const editing = state.editing && state.editing.type === 'expense' ? state.editing : null;
@@ -589,8 +614,8 @@ async function submitExpense(e) {
   const category_id = Number($('#ex-category').value);
   const date = $('#ex-date').value;
   const note = $('#ex-note').value.trim() || null;
-  if (!amount || amount <= 0) { msg.textContent = 'Enter an amount'; msg.style.display = 'block'; return; }
-  if (!category_id) { msg.textContent = 'Choose a category'; msg.style.display = 'block'; return; }
+  if (!amount || amount <= 0) { msg.textContent = 'Please enter an amount.'; msg.style.display = 'block'; return; }
+  if (!category_id) { msg.textContent = 'Please select a category.'; msg.style.display = 'block'; return; }
   const body = { amount, category_id, date, note };
   const editing = state.editing && state.editing.type === 'expense';
   try {
@@ -602,6 +627,7 @@ async function submitExpense(e) {
     loadHome();
     if (state.tab === 'transactions') loadTransactions();
     if (state.tab === 'budget') loadBudget();
+    if (state.tab === 'insights') loadInsights();
   } catch (err) {
     msg.textContent = err.message;
     msg.style.display = 'block';
@@ -633,11 +659,14 @@ function renderBudget(page) {
     page.innerHTML = `
       <div class="page-head"><h2>Budget</h2></div>
       <div class="card section-card">
-        <div class="empty">You need a budget period to set category budgets.</div>
-        <button type="button" class="btn-primary btn-block" id="budget-add-income">+ Add income</button>
+        <div class="empty">
+          <p class="empty-title">Give your money a plan.</p>
+          <p>Set how long your money needs to last and create your first budget.</p>
+          <button type="button" class="btn-primary" id="budget-create" style="margin-top:14px">Create budget</button>
+        </div>
       </div>
     `;
-    page.querySelector('#budget-add-income').addEventListener('click', () => openIncomeModal());
+    page.querySelector('#budget-create').addEventListener('click', () => openIncomeModal());
     return;
   }
 
@@ -659,7 +688,7 @@ function renderBudget(page) {
       <div class="bs-item"><span class="label">Remaining</span><span class="value ${o.moneyAvailable >= 0 ? 'ok' : 'expense'}">${money(o.moneyAvailable)}</span></div>
     </div>
     <div class="alloc-bar"><div class="alloc-fill" style="width:${period.amount > 0 ? Math.min(100, (b.totalBudgeted / period.amount) * 100) : 0}%"></div></div>
-    <div class="alloc-caption muted">${b.totalBudgeted > 0 ? `${Math.round((b.totalBudgeted / period.amount) * 100)}% of your money has a purpose` : 'Give your money a purpose by setting category budgets.'}</div>
+    <div class="alloc-caption muted">${b.totalBudgeted >= period.amount ? '100% of your money has a purpose' : `${money(unbudgeted)} still needs a purpose.`}</div>
   `;
   page.appendChild(summary);
 
@@ -804,7 +833,7 @@ async function loadInsights() {
   insightCard.className = 'card section-card';
   insightCard.innerHTML = `<div class="section-head"><h2>What’s going on with your money</h2></div>`;
   if (!insights.length) {
-    insightCard.innerHTML += `<div class="empty">Add some data to see insights here.</div>`;
+    insightCard.innerHTML += `<div class="empty"><p class="empty-title">Your insights are coming.</p><p>Keep adding income and expenses and we’ll start finding useful patterns.</p></div>`;
   } else {
     const list = document.createElement('div');
     list.className = 'insight-list';
@@ -1166,7 +1195,9 @@ function renderAccountCard() {
 /* ---------------- Init ---------------- */
 
 function wireModals() {
-  $('#fab').addEventListener('click', () => openExpenseModal());
+  $('#fab').addEventListener('click', () => openTxTypeModal());
+  $('#tx-type-income').addEventListener('click', () => { closeModal('tx-type-modal'); openIncomeModal(); });
+  $('#tx-type-expense').addEventListener('click', () => { closeModal('tx-type-modal'); openExpenseModal(); });
   document.querySelectorAll('.modal-close').forEach((b) =>
     b.addEventListener('click', () => closeModal(b.dataset.close))
   );

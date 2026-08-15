@@ -555,6 +555,13 @@ input[type="number"] {
   padding: 24px 8px;
 }
 
+.empty-title {
+  color: var(--text);
+  font-weight: 700;
+  font-size: 16px;
+  margin-bottom: 4px;
+}
+
 .empty a {
   color: var(--accent-2);
 }
@@ -638,6 +645,13 @@ input[type="number"] {
   color: var(--muted);
   font-size: 14px;
   margin-top: 12px;
+}
+
+.hero-sub {
+  position: relative;
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 8px;
 }
 
 .hero-cta {
@@ -1240,6 +1254,40 @@ input[type="number"] {
 }
 
 .modal-close:hover { color: var(--text); }
+
+.tx-type-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.tx-type-btn {
+  padding: 22px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: 16px;
+  background: var(--surface);
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.1s ease, filter 0.2s ease;
+}
+
+.tx-type-btn:active { transform: scale(0.97); }
+
+.tx-type-btn.income {
+  color: var(--income);
+  border-color: rgba(45, 212, 167, 0.4);
+}
+
+.tx-type-btn.expense {
+  color: var(--expense);
+  border-color: rgba(255, 107, 122, 0.4);
+}
+
+@media (max-width: 380px) {
+  .tx-type-options { grid-template-columns: 1fr; }
+}
 
 @media (min-width: 768px) {
   .modal { align-items: center; padding: 24px; }

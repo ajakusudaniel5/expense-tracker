@@ -431,7 +431,7 @@ function computePeriodStatus(period, spent) {
   const today = todayStr();
   const daysTotal = daysBetween(period.start_date, period.end_date) + 1;
   const daysElapsed = Math.max(1, daysBetween(period.start_date, today) + 1);
-  const daysRemaining = Math.max(0, daysBetween(today, period.end_date));
+  const daysRemaining = Math.max(0, daysBetween(today, period.end_date) + 1);
   const available = period.amount - spent;
   const plannedRate = period.amount / Math.max(1, daysTotal);
   const pace = spent / daysElapsed;
@@ -439,7 +439,7 @@ function computePeriodStatus(period, spent) {
 
   let tone = 'green';
   let title = "You're on track.";
-  let message = 'Keep it up.';
+  let message = 'Keep it up — you’re spending within your plan.';
   if (spent >= period.amount) {
     tone = 'red';
     title = 'This budget is spent.';
@@ -450,12 +450,12 @@ function computePeriodStatus(period, spent) {
     message = 'Add your next income to start a new one.';
   } else if (pace * daysRemaining > available) {
     tone = 'red';
-    title = 'Careful — you may run out.';
-    message = 'At your current pace, you could run out before your next income.';
+    title = 'You may run out before your next income.';
+    message = 'At your current pace, you might run out before your next income.';
   } else if (pace > plannedRate * 1.05) {
     tone = 'yellow';
-    title = 'You’re spending a little faster than planned.';
-    message = 'Try slowing down a bit to stay within your budget.';
+    title = 'You’re spending faster than planned.';
+    message = 'You’re still on track, but try slowing down a little.';
   } else {
     tone = 'green';
     title = 'You’re on track.';
@@ -645,7 +645,23 @@ app.get('/api/overview', requireAuth, async (req, res) => {
     budget: { totalBudgeted: 0, categories: [] },
   };
 
-  if (!period) return res.json(base);
+  const hasTxRow = await db.prepare(
+    'SELECT COUNT(*) AS c FROM transactions WHERE user_id = ?'
+  ).get(req.user.id);
+  base.hasTransactions = hasTxRow.c > 0;
+
+  if (!period) {
+    if (base.hasTransactions) {
+      const aggAll = await db.prepare(
+        'SELECT type, COALESCE(SUM(amount), 0) AS total FROM transactions WHERE user_id = ? GROUP BY type'
+      ).all(req.user.id);
+      for (const row of aggAll) {
+        if (row.type === 'income') base.totalIncome = row.total;
+        else base.totalExpense = row.total;
+      }
+    }
+    return res.json(base);
+  }
 
   const agg = await db.prepare(
     "SELECT type, COALESCE(SUM(amount), 0) AS total FROM transactions " +
@@ -673,7 +689,7 @@ app.get('/api/overview', requireAuth, async (req, res) => {
     ).get(req.user.id, 'expense', b.category_id, period.start_date, period.end_date);
     const spentCat = spentRow.s;
     const pct = b.amount > 0 ? (spentCat / b.amount) * 100 : 0;
-    const catStatus = spentCat > b.amount ? 'over' : pct >= 80 ? 'close' : 'safe';
+    const catStatus = spentCat >= b.amount ? 'over' : pct >= 70 ? 'close' : 'safe';
     budgetCats.push({
       id: b.id,
       category_id: b.category_id,
@@ -729,23 +745,47 @@ app.get('/api/insights', requireAuth, async (req, res) => {
       insights.push({ icon: '💰', tone: 'neutral', text: `You have ${req.user.currency}${remaining.toFixed(2)} remaining for this budget period.` });
     }
 
-    const cats = await db.prepare(
-      'SELECT category_id, category_name, category_icon, amount, spent FROM ' +
-      '(SELECT b.category_id, c.name AS category_name, c.icon AS category_icon, b.amount, ' +
-      '(SELECT COALESCE(SUM(t.amount), 0) FROM transactions t WHERE t.user_id = b.user_id AND t.type = ? AND t.category_id = b.category_id AND t.date BETWEEN ? AND ?) AS spent ' +
-      'FROM budgets b JOIN categories c ON c.id = b.category_id WHERE b.user_id = ? AND b.budget_period_id = ?)'
-    ).all('expense', period.start_date, period.end_date, req.user.id, period.id);
+    const periodExpenses = tx.filter(
+      (t) => t.type === 'expense' && t.date >= period.start_date && t.date <= period.end_date
+    );
+    const hasMeaningfulData = spent >= 20 && periodExpenses.length >= 2;
 
-    const biggest = cats.slice().sort((a, b) => b.spent - a.spent)[0];
-    if (biggest && biggest.spent > 0) {
-      insights.push({ icon: biggest.category_icon || '🍔', tone: 'neutral', text: `${biggest.category_name} is your biggest expense this period (${req.user.currency}${biggest.spent.toFixed(2)}).` });
+    if (hasMeaningfulData) {
+      const cats = await db.prepare(
+        'SELECT category_id, category_name, category_icon, amount, spent FROM ' +
+        '(SELECT b.category_id, c.name AS category_name, c.icon AS category_icon, b.amount, ' +
+        '(SELECT COALESCE(SUM(t.amount), 0) FROM transactions t WHERE t.user_id = b.user_id AND t.type = ? AND t.category_id = b.category_id AND t.date BETWEEN ? AND ?) AS spent ' +
+        'FROM budgets b JOIN categories c ON c.id = b.category_id WHERE b.user_id = ? AND b.budget_period_id = ?)'
+      ).all('expense', period.start_date, period.end_date, req.user.id, period.id);
+
+      const biggest = cats.slice().sort((a, b) => b.spent - a.spent)[0];
+      if (biggest && biggest.spent > 0) {
+        insights.push({ icon: biggest.category_icon || '🍔', tone: 'neutral', text: `${biggest.category_name} is your biggest expense this period (${req.user.currency}${biggest.spent.toFixed(2)}).` });
+      }
+
+      for (const c of cats) {
+        if (c.spent > c.amount) {
+          insights.push({ icon: '⚠️', tone: 'danger', text: `You've gone over your ${c.category_name} budget by ${req.user.currency}${(c.spent - c.amount).toFixed(2)}.` });
+        } else if (c.amount > 0 && (c.spent / c.amount) >= 0.8) {
+          insights.push({ icon: '⚠️', tone: 'warn', text: `You've used ${Math.round((c.spent / c.amount) * 100)}% of your ${c.category_name} budget (${req.user.currency}${c.spent.toFixed(2)} / ${req.user.currency}${c.amount.toFixed(2)}).` });
+        }
+      }
+    } else if (periodExpenses.length > 0) {
+      insights.push({ icon: '🌱', tone: 'neutral', text: 'Keep tracking your spending and we’ll start showing useful patterns here.' });
     }
 
-    for (const c of cats) {
-      if (c.spent > c.amount) {
-        insights.push({ icon: '⚠️', tone: 'danger', text: `You've gone over your ${c.category_name} budget by ${req.user.currency}${(c.spent - c.amount).toFixed(2)}.` });
-      } else if (c.amount > 0 && (c.spent / c.amount) >= 0.8) {
-        insights.push({ icon: '⚠️', tone: 'warn', text: `You've used ${Math.round((c.spent / c.amount) * 100)}% of your ${c.category_name} budget (${req.user.currency}${c.spent.toFixed(2)} / ${req.user.currency}${c.amount.toFixed(2)}).` });
+    const prevPeriod = await db.prepare(
+      'SELECT * FROM budget_periods WHERE user_id = ? AND start_date < ? ORDER BY start_date DESC LIMIT 1'
+    ).get(req.user.id, period.start_date);
+    if (prevPeriod) {
+      const prevSpentRows = await db.prepare(
+        'SELECT COALESCE(SUM(amount), 0) AS s FROM transactions WHERE user_id = ? AND type = ? AND date BETWEEN ? AND ?'
+      ).get(req.user.id, 'expense', prevPeriod.start_date, prevPeriod.end_date);
+      const prevSpent = prevSpentRows.s;
+      if (prevSpent > 0 && spent > prevSpent) {
+        insights.push({ icon: '📈', tone: 'warn', text: `You've spent more this period (${req.user.currency}${spent.toFixed(2)}) than your previous period (${req.user.currency}${prevSpent.toFixed(2)}).` });
+      } else if (prevSpent > 0 && spent < prevSpent) {
+        insights.push({ icon: '🟢', tone: 'good', text: `Nice work — you've spent ${req.user.currency}${(prevSpent - spent).toFixed(2)} less this period than your previous one.` });
       }
     }
   }
@@ -768,7 +808,7 @@ app.get('/api/insights', requireAuth, async (req, res) => {
     if (status.tone === 'green') {
       insights.push({ icon: '🟢', tone: 'good', text: 'Your spending is currently within your planned budget.' });
     } else if (status.tone === 'yellow') {
-      insights.push({ icon: '🟡', tone: 'warn', text: 'You’re spending a little faster than planned this period.' });
+      insights.push({ icon: '🟡', tone: 'warn', text: 'You’re spending faster than planned this period.' });
     } else if (status.tone === 'red') {
       insights.push({ icon: '🔴', tone: 'danger', text: 'Your current spending rate may cause you to run out before this period ends.' });
     }
