@@ -250,32 +250,6 @@ function renderHome(page) {
   const o = state.overview;
   page.innerHTML = '';
 
-  const hero = document.createElement('div');
-  const tone = o.status ? o.status.tone : 'none';
-  hero.className = `status-hero status-${tone}`;
-  if (o.period) {
-    hero.innerHTML = `
-      <div class="hero-tone">${tone === 'green' ? '🟢' : tone === 'yellow' ? '🟡' : '🔴'}</div>
-      <div class="hero-title">${escapeHtml(o.status.title)}</div>
-      <div class="hero-msg">${escapeHtml(o.status.message)}</div>
-    `;
-  } else if (o.hasTransactions) {
-    hero.innerHTML = `
-      <div class="hero-tone">🎯</div>
-      <div class="hero-title">Set a budget period to plan your spending.</div>
-      <div class="hero-msg">Add your most recent income and pick how long it should last.</div>
-      <button type="button" class="btn-primary hero-cta" id="hero-add-income">+ Add income</button>
-    `;
-  } else {
-    hero.innerHTML = `
-      <div class="hero-tone">🙌</div>
-      <div class="hero-title">Let’s get your money under control.</div>
-      <div class="hero-msg">Start by adding the money you currently have or recently received.</div>
-      <button type="button" class="btn-primary hero-cta" id="hero-add-income">+ Add income</button>
-    `;
-  }
-  page.appendChild(hero);
-
   const chips = document.createElement('div');
   chips.className = 'summary-chips';
   const chip = (label, value, cls) => `<div class="chip-card ${cls}"><span class="cc-label">${label}</span><span class="cc-value">${value}</span></div>`;
@@ -343,8 +317,6 @@ function renderHome(page) {
   if (qe) qe.addEventListener('click', () => openExpenseModal());
   const qi = page.querySelector('#qa-income');
   if (qi) qi.addEventListener('click', () => openIncomeModal());
-  const hci = page.querySelector('#hero-add-income');
-  if (hci) hci.addEventListener('click', () => openIncomeModal());
 }
 
 async function loadInsightTeasers() {
