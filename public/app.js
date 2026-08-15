@@ -257,15 +257,12 @@ function renderHome(page) {
     hero.innerHTML = `
       <div class="hero-tone">${tone === 'green' ? '🟢' : tone === 'yellow' ? '🟡' : '🔴'}</div>
       <div class="hero-title">${escapeHtml(o.status.title)}</div>
-      <div class="hero-safe">${money(o.safePerDay)}</div>
-      <div class="hero-safe-label">Daily amount available</div>
-      <div class="hero-sub">Based on your current money and ${o.daysRemaining} ${o.daysRemaining === 1 ? 'day' : 'days'} remaining.</div>
       <div class="hero-msg">${escapeHtml(o.status.message)}</div>
     `;
   } else if (o.hasTransactions) {
     hero.innerHTML = `
       <div class="hero-tone">🎯</div>
-      <div class="hero-title">Set a budget period to see your daily amount.</div>
+      <div class="hero-title">Set a budget period to plan your spending.</div>
       <div class="hero-msg">Add your most recent income and pick how long it should last.</div>
       <button type="button" class="btn-primary hero-cta" id="hero-add-income">+ Add income</button>
     `;
@@ -287,8 +284,7 @@ function renderHome(page) {
       chip('Money available', money(o.moneyAvailable), 'ok') +
       chip('Income', money(o.totalIncome), 'income') +
       chip('Spent', money(o.totalExpense), 'expense') +
-      chip('Days left', o.daysRemaining, '') +
-      chip('Spending pace', `${money(o.safePerDay)}/day`, '');
+      chip('Days left', o.daysRemaining, '');
   } else if (o.hasTransactions) {
     chips.innerHTML =
       chip('Income', money(o.totalIncome), 'income') +
