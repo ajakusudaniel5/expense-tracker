@@ -504,7 +504,19 @@ function editTransaction(t) {
 
 let incomePeriod = { kind: 'days', days: 7 };
 
-function openIncomeModal(editing) {
+async function categorySource() {
+  const src = state.overview ? state.overview.categories : (state.categories.length ? state.categories : null);
+  if (src) return src;
+  try {
+    const cats = await api('/api/categories');
+    state.categories = cats;
+    return cats;
+  } catch (_) {
+    return [];
+  }
+}
+
+async function openIncomeModal(editing) {
   state.editing = editing || null;
   const isEdit = !!editing && editing.type === 'income';
   $('#income-modal h2').textContent = isEdit ? 'Edit income' : 'Add income';
@@ -513,8 +525,9 @@ function openIncomeModal(editing) {
   $('#in-note').value = isEdit ? editing.note || '' : '';
   $('#in-end-date').style.display = 'none';
   incomePeriod = { kind: 'days', days: 7 };
+  const cats = await categorySource();
   const sel = $('#in-source');
-  sel.innerHTML = (state.overview ? state.overview.categories : state.categories)
+  sel.innerHTML = cats
     .filter((c) => c.type === 'income')
     .map((c) => `<option value="${c.id}">${escapeHtml(c.icon)} ${escapeHtml(c.name)}</option>`).join('');
   if (isEdit && editing.category_id) sel.value = String(editing.category_id);
@@ -526,7 +539,10 @@ function openIncomeModal(editing) {
 function renderIncomeChips() {
   document.querySelectorAll('#in-period-chips .chip').forEach((chip) => {
     const days = Number(chip.dataset.days);
-    const active = incomePeriod.kind === 'days' && incomePeriod.days === days;
+    const active =
+      (incomePeriod.kind === 'days' && incomePeriod.days === days) ||
+      (incomePeriod.kind === 'date' && days === 0) ||
+      (incomePeriod.kind === 'none' && days === -1);
     chip.classList.toggle('active', active);
   });
   $('#in-end-date').style.display = incomePeriod.kind === 'date' ? 'block' : 'none';
@@ -592,13 +608,13 @@ function openTxTypeModal() {
   $('#tx-type-modal').style.display = 'flex';
 }
 
-function openExpenseModal() {
+async function openExpenseModal() {
   const editing = state.editing && state.editing.type === 'expense' ? state.editing : null;
   $('#ex-amount').value = editing ? editing.amount : '';
   $('#ex-category').value = editing ? String(editing.category_id || '') : '';
   $('#ex-date').value = editing ? editing.date : todayStr();
   $('#ex-note').value = editing ? editing.note || '' : '';
-  const cats = (state.overview ? state.overview.categories : state.categories).filter((c) => c.type === 'expense');
+  const cats = (await categorySource()).filter((c) => c.type === 'expense');
   const sel = $('#ex-category');
   sel.innerHTML = cats.map((c) => `<option value="${c.id}">${escapeHtml(c.icon)} ${escapeHtml(c.name)}</option>`).join('');
   if (editing && !sel.value && cats.length) sel.value = String(editing.category_id);

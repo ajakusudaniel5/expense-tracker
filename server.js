@@ -124,15 +124,6 @@ if (typeof process !== 'undefined' && process.on) {
 }
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Cache-Control', 'no-store');
-  next();
-});
 
 app.use((req, res, next) => {
   if (req.path === '/' || req.path.startsWith('/api/')) {
@@ -145,6 +136,16 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/health', async (req, res) => {
   try {
@@ -210,15 +211,19 @@ function cleanNote(note) {
   return typeof note === 'string' && note.trim() ? note.slice(0, 200) : null;
 }
 
+function isPositiveAmount(n) {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0;
+}
+
 /* ---------------- Auth ---------------- */
 
 app.post('/api/auth/register', async (req, res) => {
   const { email, password, name } = req.body || {};
-  if (typeof email !== 'string' || !EMAIL_RE.test(email.trim())) {
+  if (typeof email !== 'string' || !EMAIL_RE.test(email.trim()) || email.trim().length > 254) {
     return res.status(400).json({ error: 'Enter a valid email address' });
   }
-  if (typeof password !== 'string' || password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (typeof password !== 'string' || password.length < 6 || password.length > 200) {
+    return res.status(400).json({ error: 'Password must be between 6 and 200 characters' });
   }
   const existing = await db.prepare('SELECT id FROM users WHERE lower(email) = lower(?)').get(email.trim());
   if (existing) return res.status(409).json({ error: 'An account with this email already exists' });
@@ -273,8 +278,8 @@ app.put('/api/auth/password', requireAuth, async (req, res) => {
   if (!verifyPassword(current_password, row.password_hash)) {
     return res.status(401).json({ error: 'Current password is incorrect' });
   }
-  if (new_password.length < 6) {
-    return res.status(400).json({ error: 'New password must be at least 6 characters' });
+  if (new_password.length < 6 || new_password.length > 200) {
+    return res.status(400).json({ error: 'New password must be between 6 and 200 characters' });
   }
   await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(new_password), req.user.id);
   for (const [token, session] of SESSIONS) {
@@ -374,10 +379,12 @@ app.post('/api/categories', requireAuth, async (req, res) => {
   }
   try {
     const trimmed = name.trim().slice(0, 60);
+    if (!trimmed) return res.status(400).json({ error: 'name cannot be empty' });
+    const cleanIcon = typeof icon === 'string' ? icon.trim().slice(0, 8) : null;
     const info = await db
       .prepare('INSERT INTO categories (user_id, name, type, icon) VALUES (?, ?, ?, ?)')
-      .run(req.user.id, trimmed, type, icon || null);
-    res.status(201).json({ id: info.lastInsertRowid, user_id: req.user.id, name: trimmed, type, icon: icon || null });
+      .run(req.user.id, trimmed, type, cleanIcon);
+    res.status(201).json({ id: info.lastInsertRowid, user_id: req.user.id, name: trimmed, type, icon: cleanIcon });
   } catch (err) {
     if (err.message.includes('UNIQUE')) return res.status(409).json({ error: 'You already have a category with this name' });
     throw err;
@@ -393,7 +400,7 @@ app.put('/api/categories/:id', requireAuth, async (req, res) => {
   const updated = {
     name: name !== undefined ? name.trim().slice(0, 60) : existing.name,
     type: type !== undefined ? type : existing.type,
-    icon: icon !== undefined ? icon : existing.icon,
+    icon: icon !== undefined ? (typeof icon === 'string' ? icon.trim().slice(0, 8) : null) : existing.icon,
   };
   if (!updated.name) return res.status(400).json({ error: 'name cannot be empty' });
   if (!['income', 'expense'].includes(updated.type)) {
@@ -457,7 +464,7 @@ app.post('/api/transactions', requireAuth, async (req, res) => {
   if (amount == null || !date || !type) {
     return res.status(400).json({ error: 'amount, date and type are required' });
   }
-  if (typeof amount !== 'number' || amount <= 0) {
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({ error: 'amount must be a positive number' });
   }
   if (!['income', 'expense'].includes(type)) {
@@ -485,7 +492,7 @@ app.put('/api/transactions/:id', requireAuth, async (req, res) => {
     'SELECT * FROM transactions WHERE id = ? AND user_id = ?'
   ).get(req.params.id, req.user.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
-  if (amount !== undefined && (typeof amount !== 'number' || amount <= 0)) {
+  if (amount !== undefined && !isPositiveAmount(amount)) {
     return res.status(400).json({ error: 'amount must be a positive number' });
   }
   if (type !== undefined && !['income', 'expense'].includes(type)) {
@@ -508,14 +515,20 @@ app.put('/api/transactions/:id', requireAuth, async (req, res) => {
   await db.prepare(
     'UPDATE transactions SET amount = ?, date = ?, type = ?, category_id = ?, note = ? WHERE id = ? AND user_id = ?'
   ).run(updated.amount, updated.date, updated.type, updated.category_id, updated.note, req.params.id, req.user.id);
+  await syncPeriodsOnIncomeChange(req.user.id, existing, updated);
   res.json({ id: Number(req.params.id), ...updated });
 });
 
 app.delete('/api/transactions/:id', requireAuth, async (req, res) => {
-  const info = await db.prepare(
+  const existing = await db.prepare(
+    'SELECT * FROM transactions WHERE id = ? AND user_id = ?'
+  ).get(req.params.id, req.user.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  const linked = await linkedPeriods(req.user.id, existing);
+  for (const p of linked) await deletePeriod(req.user.id, p.id);
+  await db.prepare(
     'DELETE FROM transactions WHERE id = ? AND user_id = ?'
   ).run(req.params.id, req.user.id);
-  if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
 });
 
@@ -576,6 +589,32 @@ async function currentPeriod(userId) {
   ).get(userId);
 }
 
+async function linkedPeriods(userId, tx) {
+  if (tx.type !== 'income') return [];
+  return db.prepare(
+    'SELECT * FROM budget_periods WHERE user_id = ? AND start_date = ? AND amount = ?'
+  ).all(userId, tx.date, tx.amount);
+}
+
+async function deletePeriod(userId, periodId) {
+  await db.prepare('DELETE FROM budgets WHERE budget_period_id = ? AND user_id = ?').run(periodId, userId);
+  await db.prepare('DELETE FROM budget_periods WHERE id = ? AND user_id = ?').run(periodId, userId);
+}
+
+async function syncPeriodsOnIncomeChange(userId, tx, updated) {
+  const linked = await linkedPeriods(userId, tx);
+  for (const p of linked) {
+    if (updated.type !== 'income') {
+      await deletePeriod(userId, p.id);
+      continue;
+    }
+    const delta = daysBetween(tx.date, updated.date);
+    await db.prepare(
+      'UPDATE budget_periods SET amount = ?, start_date = ?, end_date = ? WHERE id = ? AND user_id = ?'
+    ).run(updated.amount, updated.date, addDays(p.end_date, delta), p.id, userId);
+  }
+}
+
 app.get('/api/periods', requireAuth, async (req, res) => {
   const periods = await db.prepare(
     'SELECT * FROM budget_periods WHERE user_id = ? ORDER BY start_date DESC, id DESC'
@@ -596,7 +635,7 @@ app.post('/api/income', requireAuth, async (req, res) => {
   if (amount == null || !date) {
     return res.status(400).json({ error: 'amount and date are required' });
   }
-  if (typeof amount !== 'number' || amount <= 0) {
+  if (!isPositiveAmount(amount)) {
     return res.status(400).json({ error: 'amount must be a positive number' });
   }
   if (!DATE_RE.test(date)) return res.status(400).json({ error: 'enter a valid date' });
@@ -613,7 +652,7 @@ app.post('/api/income', requireAuth, async (req, res) => {
     if (end_date <= date) return res.status(400).json({ error: 'end date must be after the income date' });
     finalEnd = end_date;
   } else if (period_days != null) {
-    if (typeof period_days !== 'number' || period_days < 1 || period_days > 365) {
+    if (typeof period_days !== 'number' || !Number.isInteger(period_days) || period_days < 1 || period_days > 365) {
       return res.status(400).json({ error: 'invalid period length' });
     }
     finalEnd = addDays(date, period_days - 1);
@@ -677,7 +716,7 @@ app.post('/api/budgets', requireAuth, async (req, res) => {
   if (!category_id || !budget_period_id || amount == null) {
     return res.status(400).json({ error: 'category, budget period and amount are required' });
   }
-  if (typeof amount !== 'number' || amount <= 0) {
+  if (!isPositiveAmount(amount)) {
     return res.status(400).json({ error: 'amount must be a positive number' });
   }
   const period = await db.prepare(
@@ -916,8 +955,13 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: 'internal server error' });
+  const status = err && err.status >= 400 && err.status < 500 ? err.status : 500;
+  if (status >= 500) console.error(err);
+  const error =
+    status === 413 ? 'request body too large' :
+    status === 400 ? 'invalid request body' :
+    'internal server error';
+  res.status(status).json({ error });
 });
 
 init()
