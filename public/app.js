@@ -1,183 +1,27 @@
 const state = {
-  month: new Date().toISOString().slice(0, 7),
+  user: null,
   categories: [],
-  transactions: [],
+  overview: null,
+  token: localStorage.getItem('tracker_token') || '',
+  tab: 'home',
+  txFilter: 'all',
+  txCategory: '',
+  editing: null,
 };
-
-let categoryDropdown = null;
 
 const CAT_COLORS = ['#7c6cf0', '#34d399', '#ff6b7a', '#fbbf24', '#60a5fa', '#f472b6', '#a3e635', '#22d3ee', '#fb923c', '#c084fc'];
 
-function catColor(id) {
-  return CAT_COLORS[Number(id) % CAT_COLORS.length];
-}
-
-function customSelect(selectEl) {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'custom-select';
-  selectEl.parentNode.insertBefore(wrapper, selectEl);
-  wrapper.appendChild(selectEl);
-  selectEl.classList.add('hidden-select');
-
-  const trigger = document.createElement('button');
-  trigger.type = 'button';
-  trigger.className = 'cs-trigger';
-  wrapper.appendChild(trigger);
-
-  const list = document.createElement('div');
-  list.className = 'cs-list';
-  wrapper.appendChild(list);
-
-  function renderTrigger() {
-    const opt = selectEl.options[selectEl.selectedIndex];
-    if (!opt) {
-      trigger.innerHTML = '<span class="cs-trigger-label"></span><span class="cs-arrow">▾</span>';
-      return;
-    }
-    const icon = opt.dataset.icon ? `<span class="cs-opt-icon">${escapeHtml(opt.dataset.icon)}</span>` : '';
-    trigger.innerHTML = `${icon}<span class="cs-trigger-label"></span><span class="cs-arrow">▾</span>`;
-    trigger.querySelector('.cs-trigger-label').textContent = opt.textContent;
-  }
-
-  function buildOptions() {
-    list.innerHTML = '';
-    [...selectEl.options].forEach((opt) => {
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = 'cs-option';
-      item.innerHTML = `<span class="cs-opt-icon">${escapeHtml(opt.dataset.icon) || ''}</span><span></span>`;
-      item.querySelector('span:last-child').textContent = opt.textContent;
-      item.addEventListener('click', () => {
-        selectEl.value = opt.value;
-        selectEl.dispatchEvent(new Event('change', { bubbles: true }));
-        renderTrigger();
-        closeList();
-      });
-      list.appendChild(item);
-    });
-  }
-
-  function openList() { wrapper.classList.add('open'); }
-  function closeList() { wrapper.classList.remove('open'); }
-
-  trigger.addEventListener('click', (e) => {
-    e.stopPropagation();
-    wrapper.classList.contains('open') ? closeList() : openList();
-  });
-
-  document.addEventListener('click', (e) => {
-    if (!wrapper.contains(e.target)) closeList();
-  });
-
-  function refresh() {
-    buildOptions();
-    renderTrigger();
-  }
-
-  refresh();
-  return { refresh, closeList };
-}
+const CURRENCIES = [
+  ['GH₵', 'Ghana Cedi (GH₵)'],
+  ['$', 'US Dollar ($)'],
+  ['₦', 'Nigerian Naira (₦)'],
+  ['KSh', 'Kenyan Shilling (KSh)'],
+  ['R', 'South African Rand (R)'],
+  ['£', 'British Pound (£)'],
+  ['€', 'Euro (€)'],
+];
 
 const $ = (sel) => document.querySelector(sel);
-
-function money(n) {
-  return (
-    'GH₵' +
-    n.toLocaleString('en-GH', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-  );
-}
-
-const TOKEN_KEY = 'tracker_token';
-
-function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || '';
-}
-
-function setToken(token) {
-  if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
-}
-
-async function api(path, options = {}) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(path, { ...options, headers });
-  if (res.status === 401) {
-    setToken(null);
-    showLockScreen();
-    throw new Error('App is locked');
-  }
-  if (res.status === 403) {
-    setToken(null);
-    showSetupScreen();
-    throw new Error('setup required');
-  }
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || 'Request failed');
-  }
-  if (res.status === 204) return null;
-  return res.json();
-}
-
-async function loadCategories() {
-  state.categories = await api('/api/categories');
-  const type = $('#t-type').value;
-  const catSel = $('#t-category');
-  catSel.innerHTML = state.categories
-    .filter((c) => c.type === type)
-    .map((c) => `<option value="${c.id}" data-icon="${escapeHtml(c.icon)}">${escapeHtml(c.name)}</option>`)
-    .join('');
-  if (categoryDropdown) categoryDropdown.refresh();
-}
-
-async function loadTransactions() {
-  state.transactions = await api(`/api/transactions?month=${state.month}`);
-  renderSummary();
-  renderTransactions();
-}
-
-function renderSummary() {
-  let income = 0;
-  let expense = 0;
-  for (const t of state.transactions) {
-    if (t.type === 'income') income += t.amount;
-    else expense += t.amount;
-  }
-  const balance = income - expense;
-  $('#sum-income').textContent = money(income);
-  $('#sum-expense').textContent = money(expense);
-  $('#sum-balance').textContent = money(balance);
-  $('#sum-balance').style.color = balance >= 0 ? '#34d399' : '#ff6b7a';
-}
-
-function renderTransactions() {
-  const list = $('#tx-list');
-  const empty = $('#tx-empty');
-  list.innerHTML = '';
-  empty.style.display = state.transactions.length ? 'none' : 'block';
-  for (const t of state.transactions) {
-    const item = document.createElement('div');
-    const color = t.category_id ? catColor(t.category_id) : (t.type === 'income' ? '#34d399' : '#ff6b7a');
-    item.className = 'tx-item';
-    item.style.borderLeftColor = color;
-    item.innerHTML = `
-      <span class="icon" style="background:${color}22;border-radius:8px;padding:4px 8px">${escapeHtml(t.category_icon) || (t.type === 'income' ? '💵' : '💸')}</span>
-      <div class="info">
-        <div class="name">${escapeHtml(t.category_name) || 'Uncategorized'}${t.note ? ' — ' + escapeHtml(t.note) : ''}</div>
-        <div class="meta">${t.date}</div>
-      </div>
-      <span class="amount ${t.type}">${t.type === 'income' ? '+' : '-'}${money(t.amount)}</span>
-      <button class="delete" data-id="${t.id}" title="Delete">&times;</button>
-    `;
-    item.querySelector('.delete').addEventListener('click', () => deleteTransaction(t.id));
-    list.appendChild(item);
-  }
-}
 
 function escapeHtml(str) {
   if (str == null) return '';
@@ -186,434 +30,820 @@ function escapeHtml(str) {
   return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-async function deleteTransaction(id) {
-  await api(`/api/transactions/${id}`, { method: 'DELETE' });
-  await loadTransactions();
+function catColor(id) {
+  return CAT_COLORS[Number(id) % CAT_COLORS.length];
 }
 
-async function loadBudgets(preferredCategoryId) {
-  const budgets = await api(`/api/budgets?month=${state.month}`);
-  const container = $('#budgets');
-  container.innerHTML = '';
-
-  const form = document.createElement('div');
-  form.className = 'budget-form';
-  form.innerHTML = `
-    <div class="field">
-      <label for="b-category">Category</label>
-      <select id="b-category"></select>
-    </div>
-    <div class="field">
-      <label for="b-limit">Monthly Limit</label>
-      <div class="stepper">
-        <button type="button" class="step-btn" data-step="-1" aria-label="Decrease">&minus;</button>
-        <input type="number" id="b-limit" step="1" min="1" placeholder="0.00">
-        <button type="button" class="step-btn" data-step="1" aria-label="Increase">+</button>
-      </div>
-    </div>
-    <div class="budget-form-actions">
-      <button id="b-add" type="button">Set Budget</button>
-      <button id="b-newcat" type="button" class="btn-ghost">+ New Category</button>
-    </div>
-  `;
-  const sel = form.querySelector('#b-category');
-  sel.innerHTML = state.categories
-    .filter((c) => c.type === 'expense')
-    .map((c) => `<option value="${c.id}" data-icon="${escapeHtml(c.icon)}">${escapeHtml(c.name)}</option>`)
-    .join('');
-  if (preferredCategoryId) sel.value = String(preferredCategoryId);
-  const budgetDropdown = customSelect(sel);
-  form.querySelector('#b-add').addEventListener('click', async () => {
-    const limit = parseFloat(form.querySelector('#b-limit').value);
-    if (!limit || limit <= 0) return alert('Enter a valid limit');
-    const categoryId = Number(sel.value);
-    const existingBudget = budgets.find((b) => b.category_id === categoryId);
-    const currentTotal = budgets.reduce((sum, b) => sum + b.limit_amount, 0) - (existingBudget ? existingBudget.limit_amount : 0);
-    const income = state.transactions
-      .filter((t) => t.type === 'income')
-      .reduce((sum, t) => sum + t.amount, 0);
-    if (currentTotal + limit > income) {
-      return alert(`This budget exceeds your monthly income. Income: ${money(income)}, Budgeted after this: ${money(currentTotal + limit)}.`);
-    }
-    await api('/api/budgets', {
-      method: 'POST',
-      body: JSON.stringify({ category_id: categoryId, month: state.month, limit_amount: limit }),
-    });
-    await loadBudgets();
-  });
-
-  const newCatForm = document.createElement('div');
-  newCatForm.className = 'new-cat-form';
-  newCatForm.style.display = 'none';
-  newCatForm.innerHTML = `
-    <div class="field">
-      <label for="bc-name">New Category Name</label>
-      <input type="text" id="bc-name" placeholder="e.g. Shopping" required>
-    </div>
-    <div class="field">
-      <label for="bc-icon">Icon</label>
-      <input type="text" id="bc-icon" maxlength="4" placeholder="🛍️">
-    </div>
-    <div class="budget-form-actions">
-      <button id="bc-add" type="button" class="btn-primary">Create Category</button>
-      <button id="bc-cancel" type="button" class="btn-ghost">Cancel</button>
-    </div>
-    <div id="bc-msg" class="form-error" style="display:none"></div>
-  `;
-  form.querySelector('#b-newcat').addEventListener('click', () => {
-    const showing = newCatForm.style.display !== 'none';
-    newCatForm.style.display = showing ? 'none' : 'grid';
-    if (!showing) form.querySelector('#bc-name').focus();
-  });
-  newCatForm.querySelector('#bc-cancel').addEventListener('click', () => {
-    newCatForm.style.display = 'none';
-  });
-  newCatForm.querySelector('#bc-add').addEventListener('click', async () => {
-    const name = newCatForm.querySelector('#bc-name').value.trim();
-    const icon = newCatForm.querySelector('#bc-icon').value.trim();
-    const msg = newCatForm.querySelector('#bc-msg');
-    msg.style.display = 'none';
-    if (!name) {
-      msg.textContent = 'Enter a category name';
-      msg.style.display = 'block';
-      return;
-    }
-    try {
-      const created = await api('/api/categories', {
-        method: 'POST',
-        body: JSON.stringify({ name, type: 'expense', icon: icon || null }),
-      });
-      state.categories = await api('/api/categories');
-      await loadCategories();
-      await loadBudgets(created.id);
-    } catch (err) {
-      msg.textContent = err.message;
-      msg.style.display = 'block';
-    }
-  });
-  container.appendChild(form);
-  container.appendChild(newCatForm);
-  wireSteppers(form);
-
-  const list = document.createElement('div');
-  list.className = 'budget-list';
-  const spent = {};
-  let monthIncome = 0;
-  for (const t of state.transactions) {
-    if (t.type === 'expense' && t.category_id) {
-      spent[t.category_id] = (spent[t.category_id] || 0) + t.amount;
-    } else if (t.type === 'income') {
-      monthIncome += t.amount;
-    }
-  }
-
-  const totalBudgeted = budgets.reduce((sum, b) => sum + b.limit_amount, 0);
-  const remaining = monthIncome - totalBudgeted;
-  const overBudgeted = remaining < 0;
-
-  const summary = document.createElement('div');
-  summary.className = 'budget-summary';
-  summary.innerHTML = `
-    <div class="budget-summary-item">
-      <span class="label">Total Budgeted</span>
-      <span class="value">${money(totalBudgeted)}</span>
-    </div>
-    <div class="budget-summary-item">
-      <span class="label">Monthly Income</span>
-      <span class="value">${money(monthIncome)}</span>
-    </div>
-    <div class="budget-summary-item ${overBudgeted ? 'over' : ''}">
-      <span class="label">${overBudgeted ? 'Over Budget' : 'Unallocated'}</span>
-      <span class="value">${money(Math.abs(remaining))}</span>
-    </div>
-  `;
-  container.appendChild(summary);
-
-  const alerts = computeBudgetAlerts(budgets, spent);
-  const alertKey = alerts.map((a) => a.msg).join('|');
-  if (alerts.length && alertKey !== lastAlertKey) {
-    lastAlertKey = alertKey;
-    alerts.forEach((a) => showAlert(a.msg, a.type));
-  }
-
-  for (const b of budgets) {
-    const s = spent[b.category_id] || 0;
-    const pct = b.limit_amount > 0 ? Math.min(100, (s / b.limit_amount) * 100) : 0;
-    const over = s > b.limit_amount;
-    const color = catColor(b.category_id);
-    const card = document.createElement('div');
-    card.className = 'budget-card';
-    card.innerHTML = `
-      <span style="font-weight:600;color:${color}">${escapeHtml(b.category_icon)} ${escapeHtml(b.category_name)}</span>
-      <div class="budget-bar"><div class="fill ${over ? 'over' : ''}" style="width:${pct}%;background:${over ? '#ff6b7a' : color}"></div></div>
-      <span class="spent ${over ? 'over' : 'ok'}">${money(s)}</span>
-      <span class="limit">/ <span class="limit-val">${money(b.limit_amount)}</span></span>
-      <button class="edit" data-id="${b.id}" title="Edit limit">✏️</button>
-      <button class="delete" data-id="${b.id}" title="Delete">&times;</button>
-    `;
-    const limitSpan = card.querySelector('.limit-val');
-    card.querySelector('.edit').addEventListener('click', () => {
-      if (card.classList.contains('editing')) return;
-      card.classList.add('editing');
-      const current = b.limit_amount;
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.step = '1';
-      input.min = '1';
-      input.value = current;
-      input.className = 'limit-edit';
-      limitSpan.replaceWith(input);
-      input.focus();
-      input.select();
-      let saving = false;
-      const save = async () => {
-        if (saving) return;
-        const next = parseFloat(input.value);
-        if (!next || next <= 0) {
-          alert('Enter a valid limit');
-          input.focus();
-          return;
-        }
-        const otherTotal = budgets.reduce((sum, bb) => (bb.id === b.id ? sum : sum + bb.limit_amount), 0);
-        const income = state.transactions
-          .filter((t) => t.type === 'income')
-          .reduce((sum, t) => sum + t.amount, 0);
-        if (otherTotal + next > income) {
-          alert(`This budget exceeds your monthly income. Income: ${money(income)}, Budgeted after this: ${money(otherTotal + next)}.`);
-          input.focus();
-          return;
-        }
-        saving = true;
-        try {
-          await api('/api/budgets', {
-            method: 'POST',
-            body: JSON.stringify({ category_id: b.category_id, month: b.month, limit_amount: next }),
-          });
-          await loadBudgets();
-        } finally {
-          saving = false;
-        }
-      };
-      const cancel = () => {
-        const repl = document.createElement('span');
-        repl.className = 'limit-val';
-        repl.textContent = money(current);
-        input.replaceWith(repl);
-        card.classList.remove('editing');
-      };
-      input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); save(); }
-        else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
-      });
-      input.addEventListener('blur', save);
-    });
-    card.querySelector('.delete').addEventListener('click', async () => {
-      await api(`/api/budgets/${b.id}`, { method: 'DELETE' });
-      await loadBudgets();
-    });
-    list.appendChild(card);
-  }
-  container.appendChild(list);
+function money(n) {
+  const sym = (state.user && state.user.currency) || 'GH₵';
+  return sym + Number(n || 0).toLocaleString('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
-  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
-  if (name === 'budgets') loadBudgets();
-  if (name === 'categories') loadCategoriesPage();
-  if (name === 'reports') loadReports();
-  if (name === 'settings') loadSettingsPage();
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-let lastAlertKey = '';
+function addDaysStr(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
-function showAlert(message, type = 'warn') {
+function fmtDate(str) {
+  if (!str) return '';
+  const d = new Date(str + 'T00:00:00');
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
+/* ---------------- API ---------------- */
+
+async function api(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  if (state.token) headers.Authorization = `Bearer ${state.token}`;
+  const res = await fetch(path, { ...options, headers });
+  if (res.status === 401) {
+    state.token = '';
+    localStorage.removeItem('tracker_token');
+    showAuth();
+    throw new Error('You need to log in');
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || 'Something went wrong');
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+/* ---------------- Toasts ---------------- */
+
+function showToast(message, type = 'warn') {
+  const root = $('#toast-root');
   const toast = document.createElement('div');
+  const icon = type === 'danger' ? '🚨' : type === 'good' ? '🎉' : '⚠️';
   toast.className = `toast toast-${type}`;
-  toast.innerHTML = `<span class="toast-icon">${type === 'danger' ? '🚨' : '⚠️'}</span><span class="toast-msg">${escapeHtml(message)}</span><button class="toast-close" aria-label="Dismiss">&times;</button>`;
+  toast.innerHTML = `<span class="toast-icon">${icon}</span><span class="toast-msg">${escapeHtml(message)}</span><button class="toast-close" aria-label="Dismiss">&times;</button>`;
   toast.querySelector('.toast-close').addEventListener('click', () => toast.remove());
-  document.body.appendChild(toast);
-  setTimeout(() => toast.classList.add('toast-show'), 10);
+  root.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.add('toast-show'));
   setTimeout(() => {
     toast.classList.remove('toast-show');
     setTimeout(() => toast.remove(), 300);
   }, 6000);
 }
 
-function computeBudgetAlerts(budgets, spent) {
-  const alerts = [];
-  for (const b of budgets) {
-    const s = spent[b.category_id] || 0;
-    const pct = b.limit_amount > 0 ? (s / b.limit_amount) * 100 : 0;
-    const name = b.category_name || 'Category';
-    if (s > b.limit_amount) {
-      const over = s - b.limit_amount;
-      alerts.push({ msg: `${name}: over budget by ${money(over)} (${Math.round(pct)}%)`, type: 'danger' });
-    } else if (pct >= 80) {
-      alerts.push({ msg: `${name}: ${Math.round(pct)}% of budget used (${money(s)} / ${money(b.limit_amount)})`, type: 'warn' });
-    }
-  }
-  return alerts;
+/* ---------------- Auth ---------------- */
+
+function showAuth() {
+  $('#app').style.display = 'none';
+  $('#auth-screen').style.display = 'flex';
+  $('#auth-msg').style.display = 'none';
 }
 
-async function checkAlertsForAdded() {
-  const budgets = await api(`/api/budgets?month=${state.month}`);
-  if (!budgets.length) return;
-  const spent = {};
-  for (const t of state.transactions) {
-    if (t.type === 'expense' && t.category_id) {
-      spent[t.category_id] = (spent[t.category_id] || 0) + t.amount;
-    }
-  }
-  computeBudgetAlerts(budgets, spent).forEach((a) => showAlert(a.msg, a.type));
+function showApp() {
+  $('#auth-screen').style.display = 'none';
+  $('#onboarding-screen').style.display = 'none';
+  $('#app').style.display = 'block';
+  setAvatar();
 }
 
-async function loadCategoriesPage() {
-  const cats = await api('/api/categories');
-  const container = $('#categories');
-  container.innerHTML = '';
+function setAuthMode(mode) {
+  const isSignup = mode === 'signup';
+  $('#auth-name-field').style.display = isSignup ? 'block' : 'none';
+  $('#auth-submit').textContent = isSignup ? 'Create account' : 'Log in';
+  $('#auth-password').autocomplete = isSignup ? 'new-password' : 'current-password';
+  document.querySelectorAll('.auth-tab').forEach((t) => t.classList.toggle('active', t.dataset.auth === mode));
+}
 
-  const form = document.createElement('div');
-  form.className = 'budget-form';
-  form.innerHTML = `
-    <div class="field">
-      <label for="c-name">Name</label>
-      <input type="text" id="c-name" placeholder="e.g. Shopping" required>
-    </div>
-    <div class="field">
-      <label for="c-type">Type</label>
-      <select id="c-type">
-        <option value="expense">Expense</option>
-        <option value="income">Income</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="c-icon">Icon</label>
-      <input type="text" id="c-icon" maxlength="4" placeholder="🛍️">
-    </div>
-    <div class="budget-form-actions">
-      <button id="c-add" type="button">Add Category</button>
-    </div>
-    <div id="c-msg" class="form-error" style="display:none"></div>
+async function submitAuth(e) {
+  e.preventDefault();
+  const mode = document.querySelector('.auth-tab.active').dataset.auth;
+  const email = $('#auth-email').value.trim();
+  const password = $('#auth-password').value;
+  const name = $('#auth-name').value.trim();
+  const msg = $('#auth-msg');
+  msg.style.display = 'none';
+  const body = mode === 'signup' ? { email, password, name } : { email, password };
+  try {
+    const res = await api(`/api/auth/${mode === 'signup' ? 'register' : 'login'}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    state.token = res.token;
+    localStorage.setItem('tracker_token', res.token);
+    state.user = res.user;
+    showApp();
+    if (!res.user.onboarded) showOnboarding();
+    else {
+      switchTab('home');
+      loadHome();
+    }
+  } catch (err) {
+    msg.textContent = err.message;
+    msg.style.display = 'block';
+  }
+}
+
+function logout() {
+  api('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  state.token = '';
+  localStorage.removeItem('tracker_token');
+  state.user = null;
+  showAuth();
+}
+
+/* ---------------- Onboarding ---------------- */
+
+let onboardStep = 0;
+let onboardAnswers = {};
+
+const ONBOARD_STEPS = [
+  {
+    title: 'What do you usually use the app for?',
+    sub: 'This helps us set things up the right way.',
+    key: 'income_type',
+    options: ['Allowance', 'Salary', 'Freelance income', 'Other'],
+  },
+  {
+    title: 'How often do you usually receive money?',
+    sub: 'We’ll use this to make budgeting feel natural.',
+    key: 'income_frequency',
+    options: ['Weekly', 'Monthly', 'Irregularly'],
+  },
+];
+
+function showOnboarding() {
+  $('#app').style.display = 'none';
+  $('#onboarding-screen').style.display = 'flex';
+  onboardStep = 0;
+  onboardAnswers = {};
+  renderOnboardStep();
+}
+
+function renderOnboardStep() {
+  const step = ONBOARD_STEPS[onboardStep];
+  $('#onboard-title').textContent = step.title;
+  $('#onboard-sub').textContent = step.sub;
+  const box = $('#onboard-options');
+  box.innerHTML = '';
+  for (const opt of step.options) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'onboard-opt' + (onboardAnswers[step.key] === opt ? ' selected' : '');
+    btn.textContent = opt;
+    btn.addEventListener('click', () => {
+      onboardAnswers[step.key] = opt;
+      renderOnboardStep();
+    });
+    box.appendChild(btn);
+  }
+  $('#onboard-next').textContent = onboardStep === ONBOARD_STEPS.length - 1 ? 'Finish' : 'Next';
+}
+
+async function finishOnboarding() {
+  try {
+    const res = await api('/api/onboarding', {
+      method: 'PUT',
+      body: JSON.stringify({
+        income_type: onboardAnswers.income_type || '',
+        income_frequency: onboardAnswers.income_frequency || '',
+        onboarded: true,
+      }),
+    });
+    state.user = res.user;
+    showApp();
+    switchTab('home');
+    loadHome();
+    showToast('Welcome! Let’s get your money set up. 🎉', 'good');
+  } catch (err) {
+    showToast(err.message, 'danger');
+  }
+}
+
+/* ---------------- Router ---------------- */
+
+function switchTab(name) {
+  state.tab = name;
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.bn-item').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.page').forEach((p) => p.classList.remove('active'));
+  const page = $(`#page-${name}`);
+  if (page) page.classList.add('active');
+  window.scrollTo(0, 0);
+  if (name === 'home') loadHome();
+  else if (name === 'transactions') loadTransactions();
+  else if (name === 'budget') loadBudget();
+  else if (name === 'insights') loadInsights();
+  else if (name === 'settings') loadSettings();
+}
+
+function setAvatar() {
+  const name = (state.user && state.user.name) || (state.user && state.user.email) || '?';
+  $('#avatar-btn').textContent = name.charAt(0).toUpperCase();
+}
+
+/* ---------------- Home / Dashboard ---------------- */
+
+async function loadHome() {
+  const page = $('#page-home');
+  page.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    state.overview = await api('/api/overview');
+  } catch (err) {
+    page.innerHTML = `<div class="empty">Could not load your dashboard.</div>`;
+    return;
+  }
+  state.user = state.overview.user;
+  setAvatar();
+  renderHome(page);
+}
+
+function renderHome(page) {
+  const o = state.overview;
+  page.innerHTML = '';
+
+  const hero = document.createElement('div');
+  const tone = o.status ? o.status.tone : 'none';
+  hero.className = `status-hero status-${tone}`;
+  if (o.period) {
+    hero.innerHTML = `
+      <div class="hero-tone">${tone === 'green' ? '🟢' : tone === 'yellow' ? '🟡' : '🔴'}</div>
+      <div class="hero-title">${escapeHtml(o.status.title)}</div>
+      <div class="hero-safe">${money(o.safePerDay)}</div>
+      <div class="hero-safe-label">Safe to spend today</div>
+      <div class="hero-msg">${escapeHtml(o.status.message)}</div>
+    `;
+  } else {
+    hero.innerHTML = `
+      <div class="hero-tone">👋</div>
+      <div class="hero-title">Let’s get your money set up.</div>
+      <div class="hero-msg">Add the money you have so we can tell you how much you can safely spend.</div>
+      <button type="button" class="btn-primary hero-cta" id="hero-add-income">+ Add income</button>
+    `;
+  }
+  page.appendChild(hero);
+
+  const chips = document.createElement('div');
+  chips.className = 'summary-chips';
+  const chip = (label, value, cls) => `<div class="chip-card ${cls}"><span class="cc-label">${label}</span><span class="cc-value">${value}</span></div>`;
+  if (o.period) {
+    chips.innerHTML =
+      chip('Money available', money(o.moneyAvailable), 'ok') +
+      chip('Income', money(o.totalIncome), 'income') +
+      chip('Spent', money(o.totalExpense), 'expense') +
+      chip('Days left', o.daysRemaining, '') +
+      chip('Spending pace', `${money(o.safePerDay)}/day`, '');
+  } else {
+    chips.innerHTML =
+      chip('Income', money(o.totalIncome), 'income') +
+      chip('Spent', money(o.totalExpense), 'expense') +
+      chip('Budget period', 'Not set', '');
+  }
+  page.appendChild(chips);
+
+  const actions = document.createElement('div');
+  actions.className = 'quick-actions';
+  actions.innerHTML = `
+    <button type="button" class="qa-btn qa-expense" id="qa-expense">+ Add expense</button>
+    <button type="button" class="qa-btn qa-income" id="qa-income">+ Add income</button>
   `;
-  form.querySelector('#c-add').addEventListener('click', async () => {
-    const name = form.querySelector('#c-name').value.trim();
-    const type = form.querySelector('#c-type').value;
-    const icon = form.querySelector('#c-icon').value.trim();
-    const msg = form.querySelector('#c-msg');
-    msg.style.display = 'none';
-    if (!name) {
-      msg.textContent = 'Enter a category name';
-      msg.style.display = 'block';
+  page.appendChild(actions);
+
+  if (o.period) {
+    const glance = document.createElement('div');
+    glance.className = 'card section-card';
+    const budgets = o.budget.categories;
+    let inner = `<div class="section-head"><h2>Budget at a glance</h2><a href="#" data-nav="budget">Manage →</a></div>`;
+    if (!budgets.length) {
+      inner += `<div class="empty">No category budgets yet. Give your money a purpose. <a href="#" data-nav="budget">Set budgets →</a></div>`;
+    } else {
+      inner += `<div class="glance-list">`;
+      for (const b of budgets.slice(0, 4)) {
+        const color = catColor(b.category_id);
+        inner += `
+          <div class="glance-item">
+            <span class="cat-ic" style="background:${color}22">${escapeHtml(b.icon)}</span>
+            <div class="glance-main">
+              <div class="glance-top"><span class="glance-name">${escapeHtml(b.name)}</span><span class="glance-val">${money(b.spent)} / ${money(b.amount)}</span></div>
+              <div class="bar"><div class="fill ${b.status}" style="width:${Math.min(100, b.pct)}%;background:${b.status === 'over' ? '#ff6b7a' : b.status === 'close' ? '#fbbf24' : color}"></div></div>
+            </div>
+            <span class="status-dot status-${b.status}" title="${b.status}"></span>
+          </div>`;
+      }
+      inner += `</div>`;
+      if (budgets.length > 4) inner += `<p class="muted link-more"><a href="#" data-nav="budget">See all ${budgets.length} budgets →</a></p>`;
+    }
+    glance.innerHTML = inner;
+    page.appendChild(glance);
+  }
+
+  const insights = document.createElement('div');
+  insights.className = 'card section-card';
+  insights.innerHTML = `<div class="section-head"><h2>Your money, in plain words</h2><a href="#" data-nav="insights">View all →</a></div><div class="insight-teaser" id="home-insights"><div class="empty">Loading…</div></div>`;
+  page.appendChild(insights);
+  loadInsightTeasers();
+
+  page.querySelectorAll('[data-nav]').forEach((el) => el.addEventListener('click', (e) => {
+    e.preventDefault();
+    switchTab(el.dataset.nav);
+  }));
+  const qe = page.querySelector('#qa-expense');
+  if (qe) qe.addEventListener('click', () => openExpenseModal());
+  const qi = page.querySelector('#qa-income');
+  if (qi) qi.addEventListener('click', () => openIncomeModal());
+  const hci = page.querySelector('#hero-add-income');
+  if (hci) hci.addEventListener('click', () => openIncomeModal());
+}
+
+async function loadInsightTeasers() {
+  const box = $('#home-insights');
+  if (!box) return;
+  try {
+    const list = await api('/api/insights');
+    if (!list.length) {
+      box.innerHTML = `<div class="empty">Insights will appear here as you use the app.</div>`;
       return;
     }
+    box.innerHTML = list.slice(0, 3).map((i) => `
+      <div class="insight-row tone-${i.tone}"><span class="insight-ic">${escapeHtml(i.icon)}</span><span>${escapeHtml(i.text)}</span></div>
+    `).join('');
+  } catch (err) {
+    box.innerHTML = `<div class="empty">Could not load insights.</div>`;
+  }
+}
+
+/* ---------------- Transactions ---------------- */
+
+let allTx = [];
+
+async function loadTransactions() {
+  const page = $('#page-transactions');
+  page.innerHTML = '<div class="empty">Loading…</div>';
+  try {
+    allTx = await api('/api/transactions');
+  } catch (err) {
+    page.innerHTML = `<div class="empty">Could not load transactions.</div>`;
+    return;
+  }
+  renderTransactions(page);
+}
+
+function renderTransactions(page) {
+  page.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'page-head';
+  head.innerHTML = `<h2>Transactions</h2>`;
+  page.appendChild(head);
+
+  const cats = state.categories.length ? state.categories : state.overview ? state.overview.categories : [];
+  const expenseCats = cats.filter((c) => c.type === 'expense');
+
+  const filters = document.createElement('div');
+  filters.className = 'tx-filters';
+  filters.innerHTML = `
+    <div class="chip-row">
+      <button type="button" class="chip ${state.txFilter === 'all' ? 'active' : ''}" data-filter="all">All</button>
+      <button type="button" class="chip ${state.txFilter === 'income' ? 'active' : ''}" data-filter="income">Income</button>
+      <button type="button" class="chip ${state.txFilter === 'expense' ? 'active' : ''}" data-filter="expense">Expenses</button>
+    </div>
+    <select id="tx-cat-filter" class="cat-filter">
+      <option value="">All categories</option>
+      ${expenseCats.map((c) => `<option value="${c.id}">${escapeHtml(c.icon)} ${escapeHtml(c.name)}</option>`).join('')}
+    </select>
+  `;
+  filters.querySelectorAll('[data-filter]').forEach((b) => b.addEventListener('click', () => {
+    state.txFilter = b.dataset.filter;
+    renderTransactions(page);
+  }));
+  const catSel = filters.querySelector('#tx-cat-filter');
+  catSel.value = state.txCategory;
+  catSel.addEventListener('change', () => {
+    state.txCategory = catSel.value;
+    renderTransactions(page);
+  });
+  page.appendChild(filters);
+
+  let list = allTx;
+  if (state.txFilter === 'income') list = list.filter((t) => t.type === 'income');
+  else if (state.txFilter === 'expense') list = list.filter((t) => t.type === 'expense');
+  if (state.txCategory) list = list.filter((t) => String(t.category_id) === String(state.txCategory));
+
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No transactions yet. Add your first expense or income.';
+    page.appendChild(empty);
+    return;
+  }
+
+  const listEl = document.createElement('div');
+  listEl.className = 'tx-list';
+  for (const t of list) {
+    const color = t.category_id ? catColor(t.category_id) : (t.type === 'income' ? '#34d399' : '#ff6b7a');
+    const item = document.createElement('div');
+    item.className = 'tx-item';
+    item.innerHTML = `
+      <span class="icon" style="background:${color}22">${escapeHtml(t.category_icon) || (t.type === 'income' ? '💵' : '💸')}</span>
+      <div class="info">
+        <div class="name">${escapeHtml(t.category_name) || (t.type === 'income' ? 'Income' : 'Expense')}${t.note ? ' — ' + escapeHtml(t.note) : ''}</div>
+        <div class="meta">${t.date}</div>
+      </div>
+      <div class="tx-actions">
+        <span class="amount ${t.type}">${t.type === 'income' ? '+' : '−'}${money(t.amount)}</span>
+        <button class="icon-btn sm" data-edit="${t.id}" title="Edit">✏️</button>
+        <button class="icon-btn sm danger" data-del="${t.id}" title="Delete">&times;</button>
+      </div>
+    `;
+    item.querySelector('[data-del]').addEventListener('click', () => deleteTransaction(t));
+    item.querySelector('[data-edit]').addEventListener('click', () => editTransaction(t));
+    listEl.appendChild(item);
+  }
+  page.appendChild(listEl);
+}
+
+async function deleteTransaction(t) {
+  if (!confirm(`Delete this ${t.type} of ${money(t.amount)}?`)) return;
+  try {
+    await api(`/api/transactions/${t.id}`, { method: 'DELETE' });
+    showToast('Deleted.', 'good');
+    loadTransactions();
+    if (state.tab === 'home') loadHome();
+    if (state.tab === 'budget') loadBudget();
+  } catch (err) {
+    showToast(err.message, 'danger');
+  }
+}
+
+function editTransaction(t) {
+  if (t.type === 'income') {
+    openIncomeModal(t);
+  } else {
+    state.editing = t;
+    openExpenseModal();
+  }
+}
+
+/* ---------------- Income modal ---------------- */
+
+let incomePeriod = { kind: 'days', days: 7 };
+
+function openIncomeModal(editing) {
+  state.editing = editing || null;
+  const isEdit = !!editing && editing.type === 'income';
+  $('#income-modal h2').textContent = isEdit ? 'Edit income' : 'Add income';
+  $('#in-amount').value = isEdit ? editing.amount : '';
+  $('#in-date').value = isEdit ? editing.date : todayStr();
+  $('#in-end-date').style.display = 'none';
+  incomePeriod = { kind: 'days', days: 7 };
+  const sel = $('#in-source');
+  sel.innerHTML = (state.overview ? state.overview.categories : state.categories)
+    .filter((c) => c.type === 'income')
+    .map((c) => `<option value="${c.id}">${escapeHtml(c.icon)} ${escapeHtml(c.name)}</option>`).join('');
+  if (isEdit && editing.category_id) sel.value = String(editing.category_id);
+  renderIncomeChips();
+  $('#income-modal').style.display = 'flex';
+  $('#in-amount').focus();
+}
+
+function renderIncomeChips() {
+  document.querySelectorAll('#in-period-chips .chip').forEach((chip) => {
+    const days = Number(chip.dataset.days);
+    const active = incomePeriod.kind === 'days' && incomePeriod.days === days;
+    chip.classList.toggle('active', active);
+  });
+  $('#in-end-date').style.display = incomePeriod.kind === 'date' ? 'block' : 'none';
+}
+
+async function submitIncome(e) {
+  e.preventDefault();
+  const msg = $('#income-msg');
+  msg.style.display = 'none';
+  const amount = parseFloat($('#in-amount').value);
+  const date = $('#in-date').value;
+  const catVal = $('#in-source').value;
+  const category_id = catVal ? Number(catVal) : null;
+  if (!amount || amount <= 0) { msg.textContent = 'Enter an amount'; msg.style.display = 'block'; return; }
+
+  const editing = state.editing && state.editing.type === 'income';
+  if (editing) {
     try {
-      await api('/api/categories', {
-        method: 'POST',
-        body: JSON.stringify({ name, type, icon: icon || null }),
+      await api(`/api/transactions/${state.editing.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ amount, date, category_id, type: 'income' }),
       });
-      await loadCategories();
-      await loadCategoriesPage();
+      closeModal('income-modal');
+      showToast('Income updated.', 'good');
+      state.overview = null;
+      loadHome();
+      if (state.tab === 'budget') loadBudget();
+      if (state.tab === 'transactions') loadTransactions();
     } catch (err) {
       msg.textContent = err.message;
       msg.style.display = 'block';
     }
-  });
-  container.appendChild(form);
-  wireSteppers(form);
-
-  const list = document.createElement('div');
-  list.className = 'category-list';
-  const income = cats.filter((c) => c.type === 'income');
-  const expense = cats.filter((c) => c.type === 'expense');
-  list.appendChild(renderCategoryGroup('Expense Categories', expense));
-  list.appendChild(renderCategoryGroup('Income Categories', income));
-  container.appendChild(list);
-}
-
-function renderCategoryGroup(title, cats) {
-  const group = document.createElement('div');
-  group.className = 'category-group';
-  const h = document.createElement('h3');
-  h.textContent = title;
-  group.appendChild(h);
-  if (!cats.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty';
-    empty.textContent = 'No categories';
-    group.appendChild(empty);
-    return group;
+    return;
   }
-  for (const c of cats) {
-    const card = document.createElement('div');
-    card.className = 'category-card';
-    const color = catColor(c.id);
-    card.innerHTML = `
-      <span class="cat-icon" style="background:${color}22;color:${color}">${escapeHtml(c.icon) || '🏷️'}</span>
-      <span class="cat-name">${escapeHtml(c.name)}</span>
-      <button class="cat-edit" data-id="${c.id}" title="Edit">✏️</button>
-      <button class="cat-delete" data-id="${c.id}" title="Delete">&times;</button>
-    `;
-    card.querySelector('.cat-edit').addEventListener('click', () => editCategory(c));
-    card.querySelector('.cat-delete').addEventListener('click', () => deleteCategory(c));
-    group.appendChild(card);
+
+  const body = { amount, date, category_id };
+  if (incomePeriod.kind === 'days' && incomePeriod.days > 0) body.period_days = incomePeriod.days;
+  else if (incomePeriod.kind === 'date') {
+    const end = $('#in-end-date').value;
+    if (!end || end <= date) { msg.textContent = 'Choose a date after the income date'; msg.style.display = 'block'; return; }
+    body.end_date = end;
   }
-  return group;
-}
-
-function editCategory(c) {
-  const name = prompt(`Edit category name (${c.name}):`, c.name);
-  if (name === null) return;
-  const trimmed = name.trim();
-  if (!trimmed) return alert('Name cannot be empty');
-  const type = prompt('Type (income/expense):', c.type);
-  if (type === null) return;
-  if (!['income', 'expense'].includes(type)) return alert('Type must be income or expense');
-  const icon = prompt('Icon (emoji):', c.icon || '');
-  if (icon === null) return;
-  (async () => {
-    try {
-      await api(`/api/categories/${c.id}`, {
-        method: 'PUT',
-        body: JSON.stringify({ name: trimmed, type, icon: icon.trim() || null }),
-      });
-      await loadCategories();
-      await loadCategoriesPage();
-    } catch (err) {
-      alert(err.message);
-    }
-  })();
-}
-
-async function deleteCategory(c) {
-  if (!confirm(`Delete category "${c.name}"?`)) return;
   try {
-    await api(`/api/categories/${c.id}`, { method: 'DELETE' });
-    await loadCategories();
-    await loadCategoriesPage();
+    const res = await api('/api/income', { method: 'POST', body: JSON.stringify(body) });
+    closeModal('income-modal');
+    showToast(res.period ? 'Income added. Your money now has a plan! 🎯' : 'Income added.', 'good');
+    state.overview = null;
+    loadHome();
+    if (state.tab === 'budget') loadBudget();
+    if (state.tab === 'transactions') loadTransactions();
   } catch (err) {
-    alert(err.message);
+    msg.textContent = err.message;
+    msg.style.display = 'block';
   }
 }
 
-async function loadReports() {
-  const container = $('#reports');
-  container.innerHTML = '<div class="empty">Loading...</div>';
+/* ---------------- Expense modal ---------------- */
 
-  const allTx = await api('/api/transactions');
-  container.innerHTML = '';
+function openExpenseModal() {
+  const editing = state.editing && state.editing.type === 'expense' ? state.editing : null;
+  $('#ex-amount').value = editing ? editing.amount : '';
+  $('#ex-category').value = editing ? String(editing.category_id || '') : '';
+  $('#ex-date').value = editing ? editing.date : todayStr();
+  $('#ex-note').value = editing ? editing.note || '' : '';
+  const cats = (state.overview ? state.overview.categories : state.categories).filter((c) => c.type === 'expense');
+  const sel = $('#ex-category');
+  sel.innerHTML = cats.map((c) => `<option value="${c.id}">${escapeHtml(c.icon)} ${escapeHtml(c.name)}</option>`).join('');
+  if (editing && !sel.value && cats.length) sel.value = String(editing.category_id);
+  $('#expense-modal').style.display = 'flex';
+  $('#ex-amount').focus();
+}
+
+async function submitExpense(e) {
+  e.preventDefault();
+  const msg = $('#expense-msg');
+  msg.style.display = 'none';
+  const amount = parseFloat($('#ex-amount').value);
+  const category_id = Number($('#ex-category').value);
+  const date = $('#ex-date').value;
+  const note = $('#ex-note').value.trim() || null;
+  if (!amount || amount <= 0) { msg.textContent = 'Enter an amount'; msg.style.display = 'block'; return; }
+  if (!category_id) { msg.textContent = 'Choose a category'; msg.style.display = 'block'; return; }
+  const body = { amount, category_id, date, note };
+  const editing = state.editing && state.editing.type === 'expense';
+  try {
+    if (editing) await api(`/api/transactions/${state.editing.id}`, { method: 'PUT', body: JSON.stringify({ ...body, type: 'expense' }) });
+    else await api('/api/transactions', { method: 'POST', body: JSON.stringify({ ...body, type: 'expense' }) });
+    state.editing = null;
+    closeModal('expense-modal');
+    showToast('Expense added.', 'good');
+    loadHome();
+    if (state.tab === 'transactions') loadTransactions();
+    if (state.tab === 'budget') loadBudget();
+  } catch (err) {
+    msg.textContent = err.message;
+    msg.style.display = 'block';
+  }
+}
+
+function closeModal(id) {
+  $(`#${id}`).style.display = 'none';
+  state.editing = null;
+}
+
+/* ---------------- Budget page ---------------- */
+
+async function loadBudget() {
+  const page = $('#page-budget');
+  page.innerHTML = '<div class="empty">Loading…</div>';
+  if (!state.overview || !state.overview.period) {
+    state.overview = await api('/api/overview');
+  }
+  renderBudget(page);
+}
+
+function renderBudget(page) {
+  page.innerHTML = '';
+  const o = state.overview;
+  const period = o.period;
+
+  if (!period) {
+    page.innerHTML = `
+      <div class="page-head"><h2>Budget</h2></div>
+      <div class="card section-card">
+        <div class="empty">You need a budget period to set category budgets.</div>
+        <button type="button" class="btn-primary btn-block" id="budget-add-income">+ Add income</button>
+      </div>
+    `;
+    page.querySelector('#budget-add-income').addEventListener('click', () => openIncomeModal());
+    return;
+  }
+
+  const head = document.createElement('div');
+  head.className = 'page-head';
+  head.innerHTML = `<h2>Budget</h2>`;
+  page.appendChild(head);
+
+  const summary = document.createElement('div');
+  summary.className = 'card section-card';
+  const b = o.budget;
+  const unbudgeted = Math.max(0, period.amount - b.totalBudgeted);
+  summary.innerHTML = `
+    <div class="section-head"><h2>${money(period.amount)} for this period</h2></div>
+    <div class="budget-summary-grid">
+      <div class="bs-item"><span class="label">Budgeted</span><span class="value">${money(b.totalBudgeted)}</span></div>
+      <div class="bs-item"><span class="label">Unbudgeted</span><span class="value ok">${money(unbudgeted)}</span></div>
+      <div class="bs-item"><span class="label">Spent</span><span class="value ${o.totalExpense > 0 ? 'expense' : ''}">${money(o.totalExpense)}</span></div>
+      <div class="bs-item"><span class="label">Remaining</span><span class="value ${o.moneyAvailable >= 0 ? 'ok' : 'expense'}">${money(o.moneyAvailable)}</span></div>
+    </div>
+    <div class="alloc-bar"><div class="alloc-fill" style="width:${period.amount > 0 ? Math.min(100, (b.totalBudgeted / period.amount) * 100) : 0}%"></div></div>
+    <div class="alloc-caption muted">${b.totalBudgeted > 0 ? `${Math.round((b.totalBudgeted / period.amount) * 100)}% of your money has a purpose` : 'Give your money a purpose by setting category budgets.'}</div>
+  `;
+  page.appendChild(summary);
+
+  const addCard = document.createElement('div');
+  addCard.className = 'card section-card';
+  addCard.innerHTML = `
+    <div class="section-head"><h2>Set a category budget</h2></div>
+    <div class="budget-form">
+      <div class="field"><label>Category</label><select id="budget-cat"></select></div>
+      <div class="field"><label>Amount</label><input type="number" id="budget-amount" step="1" min="1" placeholder="0.00"></div>
+      <button type="button" class="btn-primary" id="budget-add">Set budget</button>
+    </div>
+    <p class="form-error" id="budget-msg" style="display:none"></p>
+  `;
+  const catSel = addCard.querySelector('#budget-cat');
+  const budgetedIds = new Set(b.categories.map((c) => String(c.category_id)));
+  catSel.innerHTML = (state.overview.categories || [])
+    .filter((c) => c.type === 'expense')
+    .map((c) => `<option value="${c.id}">${escapeHtml(c.icon)} ${escapeHtml(c.name)}${budgetedIds.has(String(c.id)) ? ' (set)' : ''}</option>`).join('');
+  addCard.querySelector('#budget-add').addEventListener('click', async () => {
+    const catId = Number(catSel.value);
+    const amount = parseFloat(addCard.querySelector('#budget-amount').value);
+    const msgEl = addCard.querySelector('#budget-msg');
+    msgEl.style.display = 'none';
+    if (!catId || !amount || amount <= 0) { msgEl.textContent = 'Choose a category and enter an amount'; msgEl.style.display = 'block'; return; }
+    try {
+      await api('/api/budgets', {
+        method: 'POST',
+        body: JSON.stringify({ category_id: catId, budget_period_id: period.id, amount }),
+      });
+      showToast('Budget set.', 'good');
+      state.overview = null;
+      loadBudget();
+      loadHome();
+    } catch (err) {
+      msgEl.textContent = err.message;
+      msgEl.style.display = 'block';
+    }
+  });
+  page.appendChild(addCard);
+
+  const listCard = document.createElement('div');
+  listCard.className = 'card section-card';
+  listCard.innerHTML = `<div class="section-head"><h2>Category budgets</h2></div>`;
+  const list = document.createElement('div');
+  list.className = 'budget-list';
+  if (!b.categories.length) {
+    list.innerHTML = `<div class="empty">No budgets yet. Start with your biggest categories like Food and Transport.</div>`;
+  } else {
+    for (const cb of b.categories) {
+      const color = catColor(cb.category_id);
+      const row = document.createElement('div');
+      row.className = 'budget-row';
+      row.innerHTML = `
+        <span class="cat-ic" style="background:${color}22">${escapeHtml(cb.icon)}</span>
+        <div class="budget-row-main">
+          <div class="glance-top"><span class="glance-name">${escapeHtml(cb.name)}</span><span class="glance-val">${money(cb.spent)} / ${money(cb.amount)}</span></div>
+          <div class="bar"><div class="fill ${cb.status}" style="width:${Math.min(100, cb.pct)}%;background:${cb.status === 'over' ? '#ff6b7a' : cb.status === 'close' ? '#fbbf24' : color}"></div></div>
+          <div class="budget-sub">
+            <span class="status-chip status-${cb.status}">${cb.status === 'safe' ? '🟢 On track' : cb.status === 'close' ? '🟡 Getting close' : '🔴 Over budget'}</span>
+            <span class="muted">${cb.remaining >= 0 ? money(cb.remaining) + ' left' : money(Math.abs(cb.remaining)) + ' over'}</span>
+          </div>
+        </div>
+        <div class="budget-row-actions">
+          <button class="icon-btn sm" data-edit-budget="${cb.id}" title="Edit">✏️</button>
+          <button class="icon-btn sm danger" data-del-budget="${cb.id}" title="Remove">&times;</button>
+        </div>
+      `;
+      row.querySelector('[data-del-budget]').addEventListener('click', async () => {
+        if (!confirm(`Remove the ${cb.name} budget?`)) return;
+        await api(`/api/budgets/${cb.id}`, { method: 'DELETE' });
+        showToast('Budget removed.', 'good');
+        state.overview = null;
+        loadBudget();
+        loadHome();
+      });
+      row.querySelector('[data-edit-budget]').addEventListener('click', () => {
+        const valEl = row.querySelector('.glance-val');
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = '1';
+        input.min = '1';
+        input.value = cb.amount;
+        input.className = 'limit-edit';
+        valEl.replaceWith(input);
+        let cancelled = false;
+        input.focus();
+        input.select();
+        const save = async () => {
+          if (cancelled) return;
+          const next = parseFloat(input.value);
+          if (!next || next <= 0) { input.replaceWith(valEl); return; }
+          try {
+            await api('/api/budgets', {
+              method: 'POST',
+              body: JSON.stringify({ category_id: cb.category_id, budget_period_id: period.id, amount: next }),
+            });
+            showToast('Budget updated.', 'good');
+            state.overview = null;
+            loadBudget();
+            loadHome();
+          } catch (err) {
+            showToast(err.message, 'danger');
+            loadBudget();
+          }
+        };
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+          else if (e.key === 'Escape') { e.preventDefault(); cancelled = true; input.blur(); }
+        });
+        input.addEventListener('blur', async () => {
+          if (cancelled) {
+            input.replaceWith(valEl);
+            return;
+          }
+          await save();
+        });
+      });
+      list.appendChild(row);
+    }
+  }
+  listCard.appendChild(list);
+  page.appendChild(listCard);
+}
+
+/* ---------------- Insights & Reports ---------------- */
+
+async function loadInsights() {
+  const page = $('#page-insights');
+  page.innerHTML = '<div class="empty">Loading…</div>';
+  let insights = [];
+  let tx = [];
+  try {
+    [insights, tx] = await Promise.all([api('/api/insights'), api('/api/transactions')]);
+  } catch (err) {
+    page.innerHTML = `<div class="empty">Could not load insights.</div>`;
+    return;
+  }
+  page.innerHTML = '';
+  page.appendChild(pageHead('Insights'));
+  const insightCard = document.createElement('div');
+  insightCard.className = 'card section-card';
+  insightCard.innerHTML = `<div class="section-head"><h2>What’s going on with your money</h2></div>`;
+  if (!insights.length) {
+    insightCard.innerHTML += `<div class="empty">Add some data to see insights here.</div>`;
+  } else {
+    const list = document.createElement('div');
+    list.className = 'insight-list';
+    for (const i of insights) {
+      const row = document.createElement('div');
+      row.className = `insight-row tone-${i.tone}`;
+      row.innerHTML = `<span class="insight-ic">${escapeHtml(i.icon)}</span><span>${escapeHtml(i.text)}</span>`;
+      list.appendChild(row);
+    }
+    insightCard.appendChild(list);
+  }
+  page.appendChild(insightCard);
+  renderReports(page, tx);
+}
+
+function pageHead(title) {
+  const head = document.createElement('div');
+  head.className = 'page-head';
+  head.innerHTML = `<h2>${title}</h2>`;
+  return head;
+}
+
+function renderReports(page, allTx) {
+  const reportsCard = document.createElement('div');
+  reportsCard.className = 'card section-card';
+  reportsCard.innerHTML = `<div class="section-head"><h2>Reports</h2></div>`;
 
   if (!allTx.length) {
-    container.innerHTML = '<div class="empty">No data yet. Add some transactions to see insights.</div>';
+    reportsCard.innerHTML += `<div class="empty">No data yet. Add transactions to see reports.</div>`;
+    page.appendChild(reportsCard);
     return;
   }
 
   const { monthly, byCategory } = summarize(allTx);
-
-  container.appendChild(renderTrend(monthly));
-  container.appendChild(renderTopCategories(byCategory));
-  container.appendChild(renderDonut(byCategory));
-  container.appendChild(renderInsights(allTx));}
+  reportsCard.appendChild(renderTrend(monthly));
+  reportsCard.appendChild(renderTopCategories(byCategory));
+  reportsCard.appendChild(renderDonut(byCategory));
+  page.appendChild(reportsCard);
+}
 
 function summarize(allTx) {
   const monthly = {};
@@ -631,23 +861,18 @@ function summarize(allTx) {
       byCategory[key].amount += t.amount;
     }
   }
-  const sortedMonths = Object.keys(monthly).sort();
-  const sortedCats = Object.values(byCategory).sort((a, b) => b.amount - a.amount);
-  return { monthly, byCategory, sortedMonths: sortedMonths, sortedCats };
+  return { monthly, byCategory };
 }
 
 function renderTrend(monthly) {
   const months = Object.keys(monthly).sort();
   const section = document.createElement('div');
-  section.className = 'report-card';
+  section.className = 'report-block';
   const title = document.createElement('h3');
-  title.textContent = 'Monthly Income vs Expenses';
+  title.textContent = 'Income vs expenses over time';
   section.appendChild(title);
 
-  const max = Math.max(
-    1,
-    ...months.map((m) => Math.max(monthly[m].income, monthly[m].expense))
-  );
+  const max = Math.max(1, ...months.map((m) => Math.max(monthly[m].income, monthly[m].expense)));
   const chart = document.createElement('div');
   chart.className = 'trend-chart';
   for (const m of months) {
@@ -673,7 +898,6 @@ function renderTrend(monthly) {
     chart.appendChild(col);
   }
   section.appendChild(chart);
-
   const legend = document.createElement('div');
   legend.className = 'legend';
   legend.innerHTML = '<span class="legend-item"><span class="dot income-dot"></span> Income</span><span class="legend-item"><span class="dot expense-dot"></span> Expenses</span>';
@@ -683,21 +907,19 @@ function renderTrend(monthly) {
 
 function renderTopCategories(byCategory) {
   const section = document.createElement('div');
-  section.className = 'report-card';
+  section.className = 'report-block';
   const title = document.createElement('h3');
-  title.textContent = 'Top Spending Categories';
+  title.textContent = 'Where your money goes';
   section.appendChild(title);
 
-  const withIds = Object.entries(byCategory).sort((a, b) => b[1].amount - a[1].amount);
-  if (!withIds.length) {
+  const entries = Object.entries(byCategory).sort((a, b) => b[1].amount - a[1].amount);
+  if (!entries.length) {
     section.appendChild(document.createElement('div')).className = 'empty';
     section.lastChild.textContent = 'No expenses yet.';
     return section;
   }
-
-  const total = withIds.reduce((sum, [, c]) => sum + c.amount, 0);
-  const top = withIds.slice(0, 5);
-  for (const [id, c] of top) {
+  const total = entries.reduce((sum, [, c]) => sum + c.amount, 0);
+  for (const [id, c] of entries.slice(0, 5)) {
     const row = document.createElement('div');
     row.className = 'cat-bar-row';
     const pct = Math.round((c.amount / total) * 100);
@@ -716,92 +938,40 @@ function renderTopCategories(byCategory) {
 
 function renderDonut(byCategory) {
   const section = document.createElement('div');
-  section.className = 'report-card';
+  section.className = 'report-block';
   const title = document.createElement('h3');
-  title.textContent = 'Spending Breakdown';
+  title.textContent = 'Spending breakdown';
   section.appendChild(title);
 
-  const withIds = Object.entries(byCategory).sort((a, b) => b[1].amount - a[1].amount);
-  if (!withIds.length) {
+  const entries = Object.entries(byCategory).sort((a, b) => b[1].amount - a[1].amount);
+  if (!entries.length) {
     section.appendChild(document.createElement('div')).className = 'empty';
     section.lastChild.textContent = 'No expenses yet.';
     return section;
   }
-
-  const total = withIds.reduce((sum, [, c]) => sum + c.amount, 0);
+  const total = entries.reduce((sum, [, c]) => sum + c.amount, 0);
   const donut = document.createElement('div');
   donut.className = 'donut';
-  donut.style.background = conicGradient(withIds);
+  donut.style.background = conicGradient(entries);
   donut.innerHTML = `<div class="donut-hole"><strong>${money(total)}</strong><small>Total spent</small></div>`;
-
+  section.appendChild(donut);
   const legend = document.createElement('div');
   legend.className = 'donut-legend';
-  for (const [id, c] of withIds) {
+  for (const [id, c] of entries) {
     const item = document.createElement('div');
     item.className = 'donut-legend-item';
     item.innerHTML = `<span class="dot" style="background:${catColor(id)}"></span> ${escapeHtml(c.name)} <em>${money(c.amount)}</em>`;
     legend.appendChild(item);
   }
-
-  section.appendChild(donut);
   section.appendChild(legend);
   return section;
 }
 
-function renderInsights(allTx) {
-  const section = document.createElement('div');
-  section.className = 'report-card';
-  const title = document.createElement('h3');
-  title.textContent = 'Insights';
-  section.appendChild(title);
-
-  const list = document.createElement('ul');
-  list.className = 'insight-list';
-  const months = {};
-  for (const t of allTx) {
-    const m = t.date.slice(0, 7);
-    if (!months[m]) months[m] = { income: 0, expense: 0 };
-    if (t.type === 'income') months[m].income += t.amount;
-    else months[m].expense += t.amount;
-  }
-  const monthKeys = Object.keys(months).sort();
-  const latest = months[monthKeys[monthKeys.length - 1]];
-
-  const li = (text) => {
-    const el = document.createElement('li');
-    el.textContent = text;
-    list.appendChild(el);
-  };
-
-  const totalIncome = allTx.filter((t) => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const totalExpense = allTx.filter((t) => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
-
-  li(`Total income: ${money(totalIncome)}`);
-  li(`Total expenses: ${money(totalExpense)}`);
-  li(`Net savings: ${money(totalIncome - totalExpense)}`);
-
-  const rate = totalIncome > 0 ? Math.round((totalExpense / totalIncome) * 100) : 0;
-  if (rate > 100) li(`⚠️ You're spending ${rate - 100}% more than you earn.`);
-  else li(`You're saving ${100 - rate}% of your income.`);
-
-  if (monthKeys.length > 1) {
-    const prev = months[monthKeys[monthKeys.length - 2]];
-    const delta = prev.expense > 0 ? Math.round(((latest.expense - prev.expense) / prev.expense) * 100) : null;
-    if (delta !== null) {
-      if (delta > 0) li(`📈 Spending up ${delta}% vs previous month.`);
-      else li(`📉 Spending down ${Math.abs(delta)}% vs previous month.`);
-    }
-  }
-
-  section.appendChild(list);
-  return section;
-}
-
-function conicGradient(withIds) {
-  const total = withIds.reduce((sum, [, c]) => sum + c.amount, 0);
+function conicGradient(entries) {
+  const total = entries.reduce((sum, [, c]) => sum + c.amount, 0);
   if (!total) return '';
   let acc = 0;
-  const parts = withIds.map(([id, c]) => {
+  const parts = entries.map(([id, c]) => {
     const from = (acc / total) * 360;
     acc += c.amount;
     const to = (acc / total) * 360;
@@ -810,247 +980,50 @@ function conicGradient(withIds) {
   return `conic-gradient(${parts.join(', ')})`;
 }
 
-function wireSteppers(root = document) {
-  root.querySelectorAll('.stepper').forEach((stepper) => {
-    const input = stepper.querySelector('input[type="number"]');
-    if (!input) return;
-    stepper.querySelectorAll('.step-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const step = Number(btn.dataset.step);
-        const min = input.min !== '' ? Number(input.min) : null;
-        const current = input.value === '' ? 0 : Number(input.value);
-        let next = current + step;
-        if (min !== null && next < min) next = min;
-        input.value = next;
-      });
-    });
-  });
-}
+/* ---------------- Settings ---------------- */
 
-function showLockScreen() {
-  const screen = $('#lock-screen');
-  const pinInput = $('#lock-pin');
-  const err = $('#lock-error');
-  screen.style.display = 'flex';
-  pinInput.value = '';
-  err.style.display = 'none';
-  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
-  pinInput.focus();
-}
-
-function showSetupScreen() {
-  const screen = $('#setup-screen');
-  screen.style.display = 'flex';
-  document.querySelectorAll('.tab-panel').forEach((p) => p.classList.remove('active'));
-}
-
-async function setupPin() {
-  const pin = $('#setup-pin').value;
-  const pin2 = $('#setup-pin2').value;
-  const err = $('#setup-error');
-  if (!/^\d{4,8}$/.test(pin)) {
-    err.textContent = 'PIN must be 4-8 digits';
-    err.style.display = 'block';
-    return;
-  }
-  if (pin !== pin2) {
-    err.textContent = 'PINs do not match';
-    err.style.display = 'block';
-    return;
-  }
+async function loadSettings() {
+  const page = $('#page-settings');
+  page.innerHTML = '<div class="empty">Loading…</div>';
+  let cats = [];
   try {
-    await api('/api/pin/set', {
-      method: 'POST',
-      body: JSON.stringify({ pin }),
-    });
-    $('#setup-screen').style.display = 'none';
-    $('#lock-btn').style.display = '';
-    const res = await fetch('/api/pin/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin }),
-    });
-    const body = await res.json();
-    setToken(body.token);
-    document.querySelector('.tab[data-tab="dashboard"]').click();
-    loadCategories().then(loadTransactions);
-  } catch (e) {
-    err.textContent = e.message || 'Could not set PIN';
-    err.style.display = 'block';
-  }
+    cats = await api('/api/categories');
+  } catch (err) { /* ok */ }
+  state.categories = cats;
+  page.innerHTML = '';
+  page.appendChild(pageHead('Settings'));
+  page.appendChild(renderProfileCard());
+  page.appendChild(renderCategoriesCard(cats));
+  page.appendChild(renderAccountCard());
 }
 
-async function tryUnlock() {
-  const pin = $('#lock-pin').value.trim();
-  const err = $('#lock-error');
-  if (!pin) {
-    err.textContent = 'Enter your PIN';
-    err.style.display = 'block';
-    return;
-  }
-  try {
-    const res = await fetch('/api/pin/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      err.textContent = body.error || 'Incorrect PIN';
-      err.style.display = 'block';
-      if ($('#lock-pin').value.trim().length >= 8) {
-        $('#lock-pin').value = '';
-      }
-      $('#lock-pin').focus();
-      return;
-    }
-    setToken(body.token);
-    $('#lock-screen').style.display = 'none';
-    $('#lock-btn').style.display = '';
-    document.querySelector('.tab[data-tab="dashboard"]').click();
-    loadCategories().then(loadTransactions);
-  } catch (e) {
-    err.textContent = 'Something went wrong';
-    err.style.display = 'block';
-  }
-}
-
-function lockNow() {
-  setToken(null);
-  showLockScreen();
-}
-
-async function loadSettingsPage() {
-  const container = $('#settings');
-  container.innerHTML = '<div class="empty">Loading...</div>';
-  let status;
-  try {
-    status = await api('/api/pin/status');
-  } catch (err) {
-    container.innerHTML = '<div class="empty">App is locked.</div>';
-    return;
-  }
-  container.innerHTML = '';
+function renderProfileCard() {
   const card = document.createElement('div');
-  card.className = 'settings-card';
-  if (status.enabled) {
-    const changeable = status.changeable !== false;
-    card.innerHTML = `
-      <h3>PIN Lock</h3>
-      <span class="settings-status on">● Enabled</span>
-      <p class="muted">Your app is protected by a PIN. Anyone without the PIN cannot view your data.</p>
-      ${changeable ? `
-      <div class="field">
-        <label for="s-current">Current PIN</label>
-        <input type="password" id="s-current" inputmode="numeric" maxlength="8" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="s-new">New PIN (4-8 digits)</label>
-        <input type="password" id="s-new" inputmode="numeric" maxlength="8" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="s-confirm">Confirm New PIN</label>
-        <input type="password" id="s-confirm" inputmode="numeric" maxlength="8" autocomplete="off">
-      </div>
-      <div class="btn-row">
-        <button type="button" id="s-change" class="btn-primary">Change PIN</button>
-      </div>
-      ` : '<p class="muted">Your PIN is managed by the server and cannot be changed from the app.</p>'}
-    `;
-    if (changeable) {
-      card.querySelector('#s-change').addEventListener('click', async () => {
-        const cur = card.querySelector('#s-current').value;
-        const next = card.querySelector('#s-new').value;
-        const confirm = card.querySelector('#s-confirm').value;
-        if (!/^\d{4,8}$/.test(next)) return alert('New PIN must be 4-8 digits');
-        if (next !== confirm) return alert('PINs do not match');
-        try {
-          await api('/api/pin/change', {
-            method: 'POST',
-            body: JSON.stringify({ current_pin: cur, new_pin: next }),
-          });
-          alert('PIN changed successfully');
-          await loadSettingsPage();
-        } catch (err) {
-          alert(err.message);
-        }
-      });
-    }
-  } else {
-    card.innerHTML = `
-      <h3>PIN Lock</h3>
-      <span class="settings-status off">● Disabled</span>
-      <p class="muted">Set a PIN to lock the app. You'll be asked for it each time you open the app.</p>
-      <div class="field">
-        <label for="s-pin">New PIN (4-8 digits)</label>
-        <input type="password" id="s-pin" inputmode="numeric" maxlength="8" autocomplete="off">
-      </div>
-      <div class="field">
-        <label for="s-pin2">Confirm PIN</label>
-        <input type="password" id="s-pin2" inputmode="numeric" maxlength="8" autocomplete="off">
-      </div>
-      <button type="button" id="s-enable" class="btn-primary">Enable PIN</button>
-    `;
-    card.querySelector('#s-enable').addEventListener('click', async () => {
-      const pin = card.querySelector('#s-pin').value;
-      const pin2 = card.querySelector('#s-pin2').value;
-      if (!/^\d{4,8}$/.test(pin)) return alert('PIN must be 4-8 digits');
-      if (pin !== pin2) return alert('PINs do not match');
-      try {
-        await api('/api/pin/set', {
-          method: 'POST',
-          body: JSON.stringify({ pin }),
-        });
-        alert('PIN enabled. The app is now locked.');
-        $('#lock-btn').style.display = '';
-        lockNow();
-      } catch (err) {
-        alert(err.message);
-      }
-    });
-  }
-  container.appendChild(card);
-  container.appendChild(await renderProfileCard());
-  container.appendChild(await renderDeleteReportsCard());
-}
-
-async function renderProfileCard() {
-  const card = document.createElement('div');
-  card.className = 'settings-card';
-  card.innerHTML = '<div class="empty">Loading profile...</div>';
-  let profile;
-  try {
-    profile = await api('/api/profile');
-  } catch (err) {
-    card.innerHTML = '<div class="empty">Could not load profile.</div>';
-    return card;
-  }
+  card.className = 'card section-card';
+  const cur = (state.user && state.user.currency) || 'GH₵';
   card.innerHTML = `
-    <h3>My Profile</h3>
-    <span class="settings-status on">● ${escapeHtml(profile.currency || 'GH₵')}</span>
-    <div class="field">
-      <label for="p-name">Name</label>
-      <input type="text" id="p-name" value="${escapeHtml(profile.name || '')}" placeholder="Your name">
+    <div class="section-head"><h2>My profile</h2></div>
+    <div class="field"><label for="p-name">Name</label><input type="text" id="p-name" value="${escapeHtml((state.user && state.user.name) || '')}" placeholder="Your name"></div>
+    <div class="field"><label for="p-email">Email</label><input type="email" id="p-email" value="${escapeHtml((state.user && state.user.email) || '')}" disabled></div>
+    <div class="field"><label for="p-currency">Currency</label>
+      <select id="p-currency">${CURRENCIES.map(([s, label]) => `<option value="${s}" ${s === cur ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select>
     </div>
-    <div class="field">
-      <label for="p-email">Email</label>
-      <input type="text" id="p-email" value="${escapeHtml(profile.email || '')}" placeholder="you@example.com">
-    </div>
-    <button type="button" id="p-save" class="btn-primary">Save Profile</button>
+    <button type="button" class="btn-primary" id="p-save">Save profile</button>
     <span id="p-msg" class="muted"></span>
   `;
   card.querySelector('#p-save').addEventListener('click', async () => {
     const msg = card.querySelector('#p-msg');
-    const name = card.querySelector('#p-name').value;
-    const email = card.querySelector('#p-email').value;
-    msg.textContent = 'Saving...';
+    msg.textContent = 'Saving…';
     try {
-      const res = await api('/api/profile', {
+      const res = await api('/api/me', {
         method: 'PUT',
-        body: JSON.stringify({ name, email }),
+        body: JSON.stringify({ name: card.querySelector('#p-name').value, currency: card.querySelector('#p-currency').value }),
       });
+      state.user = res.user;
       msg.textContent = 'Saved.';
-      profile = res;
+      setAvatar();
+      state.overview = null;
+      loadHome();
     } catch (err) {
       msg.textContent = err.message;
     }
@@ -1058,133 +1031,210 @@ async function renderProfileCard() {
   return card;
 }
 
-async function renderDeleteReportsCard() {
+function renderCategoriesCard(cats) {
   const card = document.createElement('div');
-  card.className = 'settings-card';
-  card.innerHTML = '<div class="empty">Loading...</div>';
-  let allTx;
-  try {
-    allTx = await api('/api/transactions');
-  } catch (err) {
-    card.innerHTML = '<div class="empty">Could not load data.</div>';
-    return card;
-  }
-  const months = [...new Set(allTx.map((t) => t.date.slice(0, 7)))].sort().reverse();
-  const total = allTx.length;
+  card.className = 'card section-card';
   card.innerHTML = `
-    <h3>Delete Reports</h3>
-    <p class="muted">Reports are generated from your transactions. Deleting a period's data removes it from the reports.</p>
-    <div class="field">
-      <label for="d-month">Delete a specific month</label>
-      <select id="d-month">${months.length ? months.map((m) => `<option value="${m}">${m}</option>`).join('') : '<option value="">No months with data</option>'}</select>
+    <div class="section-head"><h2>Categories</h2></div>
+    <div class="budget-form">
+      <div class="field"><label for="c-name">Name</label><input type="text" id="c-name" placeholder="e.g. Shopping"></div>
+      <div class="field"><label for="c-type">Type</label><select id="c-type"><option value="expense">Expense</option><option value="income">Income</option></select></div>
+      <div class="field"><label for="c-icon">Icon</label><input type="text" id="c-icon" maxlength="4" placeholder="🛍️"></div>
+      <button type="button" class="btn-primary" id="c-add">Add</button>
     </div>
-    <div class="btn-row">
-      <button type="button" id="d-month-run" class="btn-danger" ${months.length ? '' : 'disabled'}>Delete selected month</button>
-      <button type="button" id="d-all-run" class="btn-danger">Delete all transactions (${total})</button>
-    </div>
-    <span id="d-msg" class="muted"></span>
+    <p class="form-error" id="c-msg" style="display:none"></p>
+    <div class="cat-groups" id="cat-groups"></div>
   `;
-  card.querySelector('#d-month-run').addEventListener('click', async () => {
-    const month = card.querySelector('#d-month').value;
-    if (!month) return;
-    if (!confirm(`Delete all transactions for ${month}? This cannot be undone.`)) return;
-    await runDelete({ scope: 'month', month }, card);
+  card.querySelector('#c-add').addEventListener('click', async () => {
+    const name = card.querySelector('#c-name').value.trim();
+    const type = card.querySelector('#c-type').value;
+    const icon = card.querySelector('#c-icon').value.trim();
+    const msg = card.querySelector('#c-msg');
+    msg.style.display = 'none';
+    if (!name) { msg.textContent = 'Enter a category name'; msg.style.display = 'block'; return; }
+    try {
+      await api('/api/categories', { method: 'POST', body: JSON.stringify({ name, type, icon: icon || null }) });
+      showToast('Category added.', 'good');
+      state.overview = null;
+      loadSettings();
+    } catch (err) {
+      msg.textContent = err.message;
+      msg.style.display = 'block';
+    }
   });
-  card.querySelector('#d-all-run').addEventListener('click', async () => {
-    if (!confirm(`Delete ALL ${total} transactions? This cannot be undone.`)) return;
-    await runDelete({ scope: 'all' }, card);
+  const groups = card.querySelector('#cat-groups');
+  renderCatGroup(groups, 'Expense', cats.filter((c) => c.type === 'expense'));
+  renderCatGroup(groups, 'Income', cats.filter((c) => c.type === 'income'));
+  return card;
+}
+
+function renderCatGroup(container, title, cats) {
+  const group = document.createElement('div');
+  group.className = 'cat-group';
+  const h = document.createElement('h3');
+  h.textContent = title;
+  group.appendChild(h);
+  if (!cats.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'None yet.';
+    group.appendChild(empty);
+    container.appendChild(group);
+    return;
+  }
+  for (const c of cats) {
+    const row = document.createElement('div');
+    row.className = 'cat-row';
+    const color = catColor(c.id);
+    row.innerHTML = `
+      <span class="cat-ic" style="background:${color}22">${escapeHtml(c.icon) || '🏷️'}</span>
+      <span class="cat-name">${escapeHtml(c.name)}</span>
+      <button class="icon-btn sm" data-edit-cat="${c.id}" title="Edit">✏️</button>
+      <button class="icon-btn sm danger" data-del-cat="${c.id}" title="Delete">&times;</button>
+    `;
+    row.querySelector('[data-del-cat]').addEventListener('click', async () => {
+      if (!confirm(`Delete category "${c.name}"?`)) return;
+      try {
+        await api(`/api/categories/${c.id}`, { method: 'DELETE' });
+        showToast('Category deleted.', 'good');
+        loadSettings();
+      } catch (err) {
+        showToast(err.message, 'danger');
+      }
+    });
+    row.querySelector('[data-edit-cat]').addEventListener('click', async () => {
+      const name = prompt(`Rename "${c.name}":`, c.name);
+      if (name === null) return;
+      const icon = prompt('Icon (emoji):', c.icon || '');
+      if (icon === null) return;
+      try {
+        await api(`/api/categories/${c.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ name: name.trim(), icon: icon.trim() || null }),
+        });
+        showToast('Category updated.', 'good');
+        loadSettings();
+      } catch (err) {
+        showToast(err.message, 'danger');
+      }
+    });
+    group.appendChild(row);
+  }
+  container.appendChild(group);
+}
+
+function renderAccountCard() {
+  const card = document.createElement('div');
+  card.className = 'card section-card';
+  card.innerHTML = `
+    <div class="section-head"><h2>Account</h2></div>
+    <div class="field"><label for="a-current">Current password</label><input type="password" id="a-current" autocomplete="current-password"></div>
+    <div class="field"><label for="a-new">New password (6+ characters)</label><input type="password" id="a-new" autocomplete="new-password"></div>
+    <div class="field"><label for="a-confirm">Confirm new password</label><input type="password" id="a-confirm" autocomplete="new-password"></div>
+    <button type="button" class="btn-primary" id="a-change">Change password</button>
+    <div class="btn-row">
+      <button type="button" class="btn-ghost" id="a-logout">Log out</button>
+      <button type="button" class="btn-ghost" id="a-lock">Lock app</button>
+    </div>
+    <p id="a-msg" class="muted"></p>
+  `;
+  card.querySelector('#a-change').addEventListener('click', async () => {
+    const msg = card.querySelector('#a-msg');
+    const cur = card.querySelector('#a-current').value;
+    const next = card.querySelector('#a-new').value;
+    const confirm = card.querySelector('#a-confirm').value;
+    msg.textContent = '';
+    if (!cur || !next) { msg.textContent = 'Fill in your current and new password.'; return; }
+    if (next !== confirm) { msg.textContent = 'New passwords do not match.'; return; }
+    try {
+      const res = await api('/api/auth/password', { method: 'PUT', body: JSON.stringify({ current_password: cur, new_password: next }) });
+      state.token = res.token;
+      localStorage.setItem('tracker_token', res.token);
+      msg.textContent = 'Password changed.';
+      showToast('Password changed.', 'good');
+    } catch (err) {
+      msg.textContent = err.message;
+    }
+  });
+  card.querySelector('#a-logout').addEventListener('click', logout);
+  card.querySelector('#a-lock').addEventListener('click', () => {
+    logout();
   });
   return card;
 }
 
-async function runDelete(payload, card) {
-  const msg = card.querySelector('#d-msg');
-  msg.textContent = 'Deleting...';
-  try {
-    const res = await api('/api/reports/delete', { method: 'POST', body: JSON.stringify(payload) });
-    msg.textContent = `Deleted ${res.deleted} transaction(s).`;
-    await loadSettingsPage();
-    loadTransactions();
-    loadBudgets();
-  } catch (err) {
-    msg.textContent = err.message;
-  }
+/* ---------------- Init ---------------- */
+
+function wireModals() {
+  $('#fab').addEventListener('click', () => openExpenseModal());
+  document.querySelectorAll('.modal-close').forEach((b) =>
+    b.addEventListener('click', () => closeModal(b.dataset.close))
+  );
+  document.querySelectorAll('.modal').forEach((m) =>
+    m.addEventListener('click', (e) => { if (e.target === m) closeModal(m.id); })
+  );
+
+  $('#income-form').addEventListener('submit', submitIncome);
+  $('#expense-form').addEventListener('submit', submitExpense);
+
+  $('#in-period-chips').addEventListener('click', (e) => {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    const days = Number(chip.dataset.days);
+    if (days === 0) incomePeriod = { kind: 'date' };
+    else if (days === -1) incomePeriod = { kind: 'none' };
+    else incomePeriod = { kind: 'days', days };
+    renderIncomeChips();
+  });
+  const endDate = $('#in-end-date');
+  endDate.min = todayStr();
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  const typeDropdown = customSelect($('#t-type'));
-  categoryDropdown = customSelect($('#t-category'));
-  typeDropdown.closeList();
-  categoryDropdown.closeList();
-
-  $('#month').value = state.month;
-  $('#month').addEventListener('change', (e) => {
-    state.month = e.target.value;
-    loadTransactions();
-  });
-  $('#t-type').addEventListener('change', loadCategories);
-  document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => switchTab(t.dataset.tab)));
-
-  $('#add-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try {
-      await api('/api/transactions', {
-        method: 'POST',
-        body: JSON.stringify({
-          amount: parseFloat($('#t-amount').value),
-          date: $('#t-date').value,
-          type: $('#t-type').value,
-          category_id: Number($('#t-category').value),
-          note: $('#t-note').value || null,
-        }),
-      });
-      e.target.reset();
-      $('#t-date').value = new Date().toISOString().slice(0, 10);
-      await loadTransactions();
-      if (state.month === new Date().toISOString().slice(0, 7)) {
-        loadBudgets();
-        checkAlertsForAdded();
-      }
-    } catch (err) {
-      alert(err.message);
-    }
-  });
-
-  $('#t-date').value = new Date().toISOString().slice(0, 10);
-  wireSteppers();
-
-  $('#lock-btn').addEventListener('click', lockNow);
-  $('#lock-unlock').addEventListener('click', tryUnlock);
-  $('#lock-pin').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') tryUnlock();
-  });
-  $('#setup-run').addEventListener('click', setupPin);
-  $('#setup-pin2').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') setupPin();
-  });
-
-  (async () => {
-    let status = { enabled: false };
-    try {
-      status = await api('/api/pin/status');
-    } catch (e) {
+function wireNav() {
+  document.querySelectorAll('.tab, .bn-item').forEach((el) =>
+    el.addEventListener('click', () => switchTab(el.dataset.tab))
+  );
+  $('#avatar-btn').addEventListener('click', () => switchTab('settings'));
+  $('#lock-btn').addEventListener('click', () => logout());
+  document.querySelectorAll('.auth-tab').forEach((t) =>
+    t.addEventListener('click', () => setAuthMode(t.dataset.auth))
+  );
+  $('#auth-form').addEventListener('submit', submitAuth);
+  $('#onboard-skip').addEventListener('click', finishOnboarding);
+  $('#onboard-next').addEventListener('click', () => {
+    const step = ONBOARD_STEPS[onboardStep];
+    if (!onboardAnswers[step.key]) {
+      showToast('Pick an option, or skip.', 'warn');
       return;
     }
-    if (status.enabled) {
-      $('#lock-btn').style.display = '';
-      if (getToken()) {
-        try {
-          await api('/api/categories');
-          document.querySelector('.tab[data-tab="dashboard"]').click();
-          loadCategories().then(loadTransactions);
-          return;
-        } catch (e) {
-          return;
-        }
-      }
-      showLockScreen();
+    if (onboardStep < ONBOARD_STEPS.length - 1) {
+      onboardStep += 1;
+      renderOnboardStep();
     } else {
-      showSetupScreen();
+      finishOnboarding();
     }
-  })();
-});
+  });
+}
+
+async function boot() {
+  wireNav();
+  wireModals();
+  if (state.token) {
+    try {
+      const res = await api('/api/auth/me');
+      state.user = res.user;
+      showApp();
+      if (!res.user.onboarded) showOnboarding();
+      else {
+        switchTab('home');
+      }
+      return;
+    } catch (err) {
+      state.token = '';
+      localStorage.removeItem('tracker_token');
+    }
+  }
+  showAuth();
+}
+
+document.addEventListener('DOMContentLoaded', boot);

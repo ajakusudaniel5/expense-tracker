@@ -2,131 +2,159 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Expense Tracker</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <h1>💰 Expense Tracker</h1>
-    <nav>
-      <button class="tab active" data-tab="dashboard">Dashboard</button>
-      <button class="tab" data-tab="reports">Reports</button>
-      <button class="tab" data-tab="budgets">Budgets</button>
-      <button class="tab" data-tab="categories">Categories</button>
-      <button class="tab" data-tab="settings">Settings</button>
-      <button class="lock-btn" id="lock-btn" title="Lock app" style="display:none">🔒 Lock</button>
+
+  <!-- Auth -->
+  <div id="auth-screen" class="screen auth-screen" style="display:none">
+    <div class="auth-box">
+      <div class="auth-logo">💰</div>
+      <h1>Expense Tracker</h1>
+      <p class="muted auth-tagline">Know where your money is going. Stay on track until your next income.</p>
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" data-auth="login">Log in</button>
+        <button type="button" class="auth-tab" data-auth="signup">Sign up</button>
+      </div>
+      <form id="auth-form">
+        <div class="field" id="auth-name-field" style="display:none">
+          <label for="auth-name">Name</label>
+          <input type="text" id="auth-name" placeholder="Your name" autocomplete="name">
+        </div>
+        <div class="field">
+          <label for="auth-email">Email</label>
+          <input type="email" id="auth-email" placeholder="you@example.com" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label for="auth-password">Password</label>
+          <input type="password" id="auth-password" placeholder="At least 6 characters" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn-primary btn-block" id="auth-submit">Log in</button>
+        <p id="auth-msg" class="form-error" style="display:none"></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- Onboarding -->
+  <div id="onboarding-screen" class="screen onboarding-screen" style="display:none">
+    <div class="onboard-box">
+      <div class="onboard-logo">🙌</div>
+      <h2 id="onboard-title">What do you usually use the app for?</h2>
+      <p class="muted" id="onboard-sub">This helps us set things up the right way.</p>
+      <div id="onboard-options" class="onboard-options"></div>
+      <div class="onboard-actions">
+        <button type="button" class="btn-ghost" id="onboard-skip">Skip for now</button>
+        <button type="button" class="btn-primary" id="onboard-next">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- App -->
+  <div id="app" class="screen app" style="display:none">
+    <header class="topbar">
+      <div class="brand">💰 <span>Expense Tracker</span></div>
+      <div class="header-right">
+        <button type="button" class="icon-btn" id="lock-btn" title="Lock the app">🔒</button>
+        <button type="button" class="avatar-btn" id="avatar-btn" title="Settings">?</button>
+      </div>
+    </header>
+
+    <nav class="topnav">
+      <button class="tab active" data-tab="home">Home</button>
+      <button class="tab" data-tab="transactions">Transactions</button>
+      <button class="tab" data-tab="budget">Budget</button>
+      <button class="tab" data-tab="insights">Insights</button>
     </nav>
-  </header>
 
-  <main>
-    <section id="tab-dashboard" class="tab-panel active">
-      <div class="summary">
-        <div class="card income-card">
-          <span class="label">Income</span>
-          <span class="value" id="sum-income">$0.00</span>
-        </div>
-        <div class="card expense-card">
-          <span class="label">Expenses</span>
-          <span class="value" id="sum-expense">$0.00</span>
-        </div>
-        <div class="card balance-card">
-          <span class="label">Balance</span>
-          <span class="value" id="sum-balance">$0.00</span>
-        </div>
+    <main>
+      <section id="page-home" class="page active"></section>
+      <section id="page-transactions" class="page"></section>
+      <section id="page-budget" class="page"></section>
+      <section id="page-insights" class="page"></section>
+      <section id="page-settings" class="page"></section>
+    </main>
+
+    <button type="button" class="fab" id="fab" aria-label="Add expense">+</button>
+
+    <nav class="bottomnav">
+      <button class="bn-item active" data-tab="home"><span class="bn-icon">🏠</span><span>Home</span></button>
+      <button class="bn-item" data-tab="transactions"><span class="bn-icon">📄</span><span>Transactions</span></button>
+      <button class="bn-item" data-tab="budget"><span class="bn-icon">🎯</span><span>Budget</span></button>
+      <button class="bn-item" data-tab="insights"><span class="bn-icon">💡</span><span>Insights</span></button>
+      <button class="bn-item" data-tab="settings"><span class="bn-icon">⚙️</span><span>Settings</span></button>
+    </nav>
+  </div>
+
+  <!-- Add income modal -->
+  <div id="income-modal" class="modal" style="display:none">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Add income</h2>
+        <button type="button" class="modal-close" data-close="income-modal">&times;</button>
       </div>
-
-      <div class="month-picker">
-        <label for="month">Month</label>
-        <input type="month" id="month">
-      </div>
-
-      <div class="layout">
-        <div class="add-panel">
-          <h2>Add Transaction</h2>
-          <form id="add-form">
-            <div class="field">
-              <label for="t-type">Type</label>
-              <select id="t-type">
-                <option value="expense">Expense</option>
-                <option value="income">Income</option>
-              </select>
-            </div>
-            <div class="field">
-              <label for="t-amount">Amount</label>
-              <div class="stepper">
-                <button type="button" class="step-btn" data-step="-1" aria-label="Decrease">&minus;</button>
-                <input type="number" id="t-amount" step="1" min="1" required placeholder="0.00">
-                <button type="button" class="step-btn" data-step="1" aria-label="Increase">+</button>
-              </div>
-            </div>
-            <div class="field">
-              <label for="t-date">Date</label>
-              <input type="date" id="t-date" required>
-            </div>
-            <div class="field">
-              <label for="t-category">Category</label>
-              <select id="t-category" required></select>
-            </div>
-            <div class="field">
-              <label for="t-note">Note</label>
-              <input type="text" id="t-note" placeholder="Optional">
-            </div>
-            <button type="submit">Add</button>
-          </form>
+      <form id="income-form">
+        <div class="field">
+          <label for="in-amount">Amount</label>
+          <input type="number" id="in-amount" step="1" min="1" placeholder="0.00" required>
         </div>
-
-        <div class="list-panel">
-          <h2>Transactions</h2>
-          <div id="tx-list" class="tx-list"></div>
-          <div id="tx-empty" class="empty">No transactions for this month.</div>
+        <div class="field">
+          <label for="in-source">Source</label>
+          <select id="in-source" required></select>
         </div>
-      </div>
-    </section>
-
-    <section id="tab-budgets" class="tab-panel">
-      <h2>Budget Planner</h2>
-      <div id="budgets"></div>
-    </section>
-
-    <section id="tab-reports" class="tab-panel">
-      <h2>Reports &amp; Insights</h2>
-      <div id="reports"></div>
-    </section>
-
-    <section id="tab-categories" class="tab-panel">
-      <h2>Category Management</h2>
-      <div id="categories"></div>
-    </section>
-
-    <section id="tab-settings" class="tab-panel">
-      <h2>Settings</h2>
-      <div id="settings"></div>
-    </section>
-  </main>
-
-  <div id="lock-screen" class="lock-screen" style="display:none">
-    <div class="lock-box">
-      <div class="lock-icon">🔒</div>
-      <h2>Enter PIN</h2>
-      <p class="muted">Enter your PIN to unlock the app</p>
-      <input type="password" id="lock-pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="••••" autocomplete="off">
-      <button id="lock-unlock" type="button">Unlock</button>
-      <p id="lock-error" class="error" style="display:none"></p>
+        <div class="field">
+          <label for="in-date">Date received</label>
+          <input type="date" id="in-date" required>
+        </div>
+        <div class="field">
+          <label>Make this money last…</label>
+          <div class="chip-row" id="in-period-chips">
+            <button type="button" class="chip" data-days="7">7 days</button>
+            <button type="button" class="chip" data-days="14">14 days</button>
+            <button type="button" class="chip" data-days="30">30 days</button>
+            <button type="button" class="chip" data-days="0">Until a date</button>
+            <button type="button" class="chip" data-days="-1">No period</button>
+          </div>
+          <input type="date" id="in-end-date" style="display:none" min="">
+        </div>
+        <button type="submit" class="btn-primary btn-block">Add income</button>
+        <p id="income-msg" class="form-error" style="display:none"></p>
+      </form>
     </div>
   </div>
 
-  <div id="setup-screen" class="lock-screen" style="display:none">
-    <div class="lock-box">
-      <div class="lock-icon">🔐</div>
-      <h2>Set Up PIN</h2>
-      <p class="muted">Choose a PIN to protect your app. This cannot be disabled once set.</p>
-      <input type="password" id="setup-pin" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="New PIN" autocomplete="off">
-      <input type="password" id="setup-pin2" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Confirm PIN" autocomplete="off">
-      <button id="setup-run" type="button">Enable PIN</button>
-      <p id="setup-error" class="error" style="display:none"></p>
+  <!-- Quick add expense modal -->
+  <div id="expense-modal" class="modal" style="display:none">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>Add expense</h2>
+        <button type="button" class="modal-close" data-close="expense-modal">&times;</button>
+      </div>
+      <form id="expense-form">
+        <div class="field">
+          <label for="ex-amount">Amount</label>
+          <input type="number" id="ex-amount" step="1" min="1" placeholder="0.00" required autofocus>
+        </div>
+        <div class="field">
+          <label for="ex-category">Category</label>
+          <select id="ex-category" required></select>
+        </div>
+        <div class="field">
+          <label for="ex-date">Date</label>
+          <input type="date" id="ex-date" required>
+        </div>
+        <div class="field">
+          <label for="ex-note">Note <span class="muted">(optional)</span></label>
+          <input type="text" id="ex-note" placeholder="e.g. Lunch">
+        </div>
+        <button type="submit" class="btn-primary btn-block">Add expense</button>
+        <p id="expense-msg" class="form-error" style="display:none"></p>
+      </form>
     </div>
   </div>
+
+  <div id="toast-root"></div>
 
   <script src="app.js"></script>
 </body>

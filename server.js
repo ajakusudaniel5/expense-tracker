@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { db, init } = require('./db');
+const { db, init, seedDefaultCategories, adoptLegacyData } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -9,102 +9,94 @@ const PORT = process.env.PORT || 3000;
 const SESSIONS = new Map();
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-const PIN_ATTEMPTS = new Map();
-const MAX_ATTEMPTS = 5;
-const LOCKOUT_MS = 10 * 60 * 1000;
+const LOGIN_ATTEMPTS = new Map();
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOGIN_LOCK_MS = 5 * 60 * 1000;
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-9]|2[0-9]|3[01])-(0[1-9]|[12]\d|3[01])$/;
+const CURRENCIES = new Set(['GH₵', '$', '₦', 'KSh', 'R', '£', '€']);
 
 function getIp(req) {
   return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
 }
 
-function pinLockedOut(ip) {
-  const rec = PIN_ATTEMPTS.get(ip);
+function loginLocked(email) {
+  const rec = LOGIN_ATTEMPTS.get(email.toLowerCase());
   if (!rec) return false;
   if (rec.lockedUntil && rec.lockedUntil > Date.now()) return true;
-  if (rec.lockedUntil && rec.lockedUntil <= Date.now()) PIN_ATTEMPTS.delete(ip);
+  if (rec.lockedUntil && rec.lockedUntil <= Date.now()) LOGIN_ATTEMPTS.delete(email.toLowerCase());
   return false;
 }
 
-function recordPinFailure(ip) {
-  const rec = PIN_ATTEMPTS.get(ip) || { count: 0, lockedUntil: 0 };
+function recordLoginFailure(email) {
+  const key = email.toLowerCase();
+  const rec = LOGIN_ATTEMPTS.get(key) || { count: 0, lockedUntil: 0 };
   rec.count += 1;
-  if (rec.count >= MAX_ATTEMPTS) {
-    rec.lockedUntil = Date.now() + LOCKOUT_MS;
+  if (rec.count >= MAX_LOGIN_ATTEMPTS) {
+    rec.lockedUntil = Date.now() + LOGIN_LOCK_MS;
     rec.count = 0;
   }
-  PIN_ATTEMPTS.set(ip, rec);
+  LOGIN_ATTEMPTS.set(key, rec);
 }
 
-function recordPinSuccess(ip) {
-  PIN_ATTEMPTS.delete(ip);
+function recordLoginSuccess(email) {
+  LOGIN_ATTEMPTS.delete(email.toLowerCase());
 }
 
-function hashPin(pin, salt) {
-  return crypto.createHash('sha256').update(salt + ':' + pin).digest('hex');
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
 }
 
-function newSalt() {
-  return crypto.randomBytes(16).toString('hex');
-}
-
-const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
-const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
-
-async function monthIncome(month) {
-  const rows = await db
-    .prepare("SELECT amount FROM transactions WHERE type = 'income' AND substr(date, 1, 7) = ?")
-    .all(month);
-  return rows.reduce((sum, r) => sum + r.amount, 0);
-}
-
-const ENV_PIN = process.env.APP_PIN || null;
-
-async function getPinRow() {
-  return db.prepare("SELECT value FROM settings WHERE key = 'pin_hash'").get();
-}
-
-async function getSaltRow() {
-  return db.prepare("SELECT value FROM settings WHERE key = 'pin_salt'").get();
-}
-
-async function pinEnabled() {
-  if (ENV_PIN) return true;
-  const row = await getPinRow();
-  return !!(row && row.value);
-}
-
-async function pinMatches(pin) {
-  if (ENV_PIN) {
-    return crypto.timingSafeEqual(
-      Buffer.from(hashPin(pin, 'env')),
-      Buffer.from(hashPin(ENV_PIN, 'env'))
-    );
-  }
-  const salt = (await getSaltRow()).value;
-  const expected = (await getPinRow()).value;
-  return hashPin(pin, salt) === expected;
-}
-
-function pinChangeable() {
-  return !ENV_PIN;
+function verifyPassword(password, stored) {
+  const [salt, hash] = String(stored || '').split(':');
+  if (!salt || !hash) return false;
+  const test = crypto.scryptSync(password, salt, 64);
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), test);
 }
 
 function generateToken() {
   return crypto.randomBytes(32).toString('hex');
 }
 
+function publicUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name || '',
+    currency: user.currency || 'GH₵',
+    income_type: user.income_type || '',
+    income_frequency: user.income_frequency || '',
+    onboarded: !!user.onboarded,
+  };
+}
+
+function createSession(userId) {
+  const token = generateToken();
+  SESSIONS.set(token, { userId, expires: Date.now() + SESSION_TTL_MS });
+  return token;
+}
+
 async function requireAuth(req, res, next) {
-  if (!(await pinEnabled())) {
-    return res.status(403).json({ error: 'setup required' });
-  }
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'unlocked required' });
+  if (!token) return res.status(401).json({ error: 'authentication required' });
   const session = SESSIONS.get(token);
   if (!session || session.expires < Date.now()) {
     if (session) SESSIONS.delete(token);
-    return res.status(401).json({ error: 'unlocked required' });
+    return res.status(401).json({ error: 'authentication required' });
   }
+  const user = await db.prepare(
+    'SELECT id, email, name, currency, income_type, income_frequency, onboarded FROM users WHERE id = ?'
+  ).get(session.userId);
+  if (!user) {
+    SESSIONS.delete(token);
+    return res.status(401).json({ error: 'authentication required' });
+  }
+  req.user = user;
+  req.token = token;
   next();
 }
 
@@ -139,217 +131,235 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-app.get('/api/pin/status', async (req, res) => {
-  res.json({ enabled: await pinEnabled(), changeable: pinChangeable() });
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function daysBetween(from, to) {
+  const a = new Date(from + 'T00:00:00Z');
+  const b = new Date(to + 'T00:00:00Z');
+  return Math.round((b - a) / 86400000);
+}
+
+function cleanNote(note) {
+  return typeof note === 'string' && note.trim() ? note.slice(0, 200) : null;
+}
+
+/* ---------------- Auth ---------------- */
+
+app.post('/api/auth/register', async (req, res) => {
+  const { email, password, name } = req.body || {};
+  if (typeof email !== 'string' || !EMAIL_RE.test(email.trim())) {
+    return res.status(400).json({ error: 'Enter a valid email address' });
+  }
+  if (typeof password !== 'string' || password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+  const existing = await db.prepare('SELECT id FROM users WHERE lower(email) = lower(?)').get(email.trim());
+  if (existing) return res.status(409).json({ error: 'An account with this email already exists' });
+
+  const info = await db
+    .prepare('INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)')
+    .run(email.trim().toLowerCase(), hashPassword(password), name && typeof name === 'string' ? name.trim().slice(0, 100) : null);
+  const userId = info.lastInsertRowid;
+  await adoptLegacyData(userId);
+  await seedDefaultCategories(userId);
+  const user = await db.prepare(
+    'SELECT id, email, name, currency, income_type, income_frequency, onboarded FROM users WHERE id = ?'
+  ).get(userId);
+  const token = createSession(userId);
+  res.status(201).json({ token, user: publicUser(user) });
 });
 
-app.post('/api/pin/set', async (req, res) => {
-  if (ENV_PIN) {
-    return res.status(409).json({ error: 'a PIN is already set' });
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body || {};
+  if (typeof email !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Email and password are required' });
   }
-  const { pin } = req.body;
-  if (typeof pin !== 'string' || !/^\d{4,8}$/.test(pin)) {
-    return res.status(400).json({ error: 'PIN must be 4-8 digits' });
+  const key = email.trim().toLowerCase();
+  if (loginLocked(key)) {
+    return res.status(429).json({ error: 'Too many attempts. Try again in a few minutes.' });
   }
-  if (await pinEnabled()) {
-    return res.status(409).json({ error: 'a PIN is already set' });
+  const user = await db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)').get(key);
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    recordLoginFailure(key);
+    return res.status(401).json({ error: 'Incorrect email or password' });
   }
-  const salt = newSalt();
-  await db.prepare(
-    "INSERT INTO settings (key, value) VALUES ('pin_hash', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
-  ).run(hashPin(pin, salt));
-  await db.prepare(
-    "INSERT INTO settings (key, value) VALUES ('pin_salt', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"
-  ).run(salt);
-  res.status(201).json({ enabled: true });
+  recordLoginSuccess(key);
+  const token = createSession(user.id);
+  res.json({ token, user: publicUser(user) });
 });
 
-app.post('/api/pin/verify', async (req, res) => {
-  const ip = getIp(req);
-  if (pinLockedOut(ip)) {
-    return res.status(429).json({ error: 'Too many attempts. Try again in 10 minutes.' });
-  }
-  const { pin } = req.body;
-  if (!(await pinEnabled())) return res.status(400).json({ error: 'no PIN is set' });
-  if (typeof pin !== 'string' || !pin) {
-    return res.status(400).json({ error: 'pin is required' });
-  }
-  if (!(await pinMatches(pin))) {
-    recordPinFailure(ip);
-    return res.status(401).json({ error: 'incorrect PIN' });
-  }
-  recordPinSuccess(ip);
-  const token = generateToken();
-  SESSIONS.set(token, { expires: Date.now() + SESSION_TTL_MS });
-  res.json({ token });
+app.post('/api/auth/logout', requireAuth, async (req, res) => {
+  SESSIONS.delete(req.token);
+  res.status(204).end();
 });
 
-app.post('/api/pin/change', requireAuth, async (req, res) => {
-  const { current_pin, new_pin } = req.body;
-  if (!(await pinEnabled())) return res.status(400).json({ error: 'no PIN is set' });
-  if (!pinChangeable()) {
-    return res.status(403).json({ error: 'PIN is managed by the server and cannot be changed in-app' });
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  res.json({ user: publicUser(req.user) });
+});
+
+app.put('/api/auth/password', requireAuth, async (req, res) => {
+  const { current_password, new_password } = req.body || {};
+  if (typeof current_password !== 'string' || typeof new_password !== 'string') {
+    return res.status(400).json({ error: 'current and new password are required' });
   }
-  if (typeof new_pin !== 'string' || !/^\d{4,8}$/.test(new_pin)) {
-    return res.status(400).json({ error: 'PIN must be 4-8 digits' });
+  const row = await db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+  if (!verifyPassword(current_password, row.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
   }
-  if (!(await pinMatches(current_pin))) {
-    return res.status(401).json({ error: 'current PIN is incorrect' });
+  if (new_password.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters' });
   }
-  await db.prepare("UPDATE settings SET value = ? WHERE key = 'pin_hash'").run(hashPin(new_pin, (await getSaltRow()).value));
+  await db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(new_password), req.user.id);
   for (const [token, session] of SESSIONS) {
-    if (session.expires > Date.now()) SESSIONS.delete(token);
+    if (session.userId === req.user.id) SESSIONS.delete(token);
   }
-  res.json({ enabled: true });
+  const fresh = createSession(req.user.id);
+  res.json({ token: fresh, user: publicUser({ ...req.user, onboarded: req.user.onboarded }) });
 });
 
-async function getSetting(key) {
-  const row = await db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
-  return row ? row.value : null;
-}
-
-async function setSetting(key, value) {
-  await db.prepare(
-    'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-  ).run(key, value);
-}
-
-app.get('/api/profile', requireAuth, async (req, res) => {
-  res.json({
-    name: (await getSetting('profile_name')) || '',
-    email: (await getSetting('profile_email')) || '',
-    currency: (await getSetting('profile_currency')) || 'GH₵',
-  });
+app.put('/api/onboarding', requireAuth, async (req, res) => {
+  const { income_type, income_frequency, onboarded } = req.body || {};
+  const updates = {};
+  if (income_type !== undefined && typeof income_type === 'string') updates.income_type = income_type.trim().slice(0, 40);
+  if (income_frequency !== undefined && typeof income_frequency === 'string') updates.income_frequency = income_frequency.trim().slice(0, 40);
+  if (onboarded !== undefined) updates.onboarded = onboarded ? 1 : 0;
+  if (Object.keys(updates).length) {
+    const sets = Object.keys(updates).map((k) => `${k} = ?`).join(', ');
+    const vals = Object.values(updates);
+    await db.prepare(`UPDATE users SET ${sets} WHERE id = ?`).run(...vals, req.user.id);
+  }
+  const user = await db.prepare(
+    'SELECT id, email, name, currency, income_type, income_frequency, onboarded FROM users WHERE id = ?'
+  ).get(req.user.id);
+  res.json({ user: publicUser(user) });
 });
 
-app.put('/api/profile', requireAuth, async (req, res) => {
-  const { name, email } = req.body;
-  if (name !== undefined) {
-    if (typeof name !== 'string' || name.trim().length > 100) {
-      return res.status(400).json({ error: 'name must be a string up to 100 characters' });
-    }
-    await setSetting('profile_name', name.trim());
+app.put('/api/me', requireAuth, async (req, res) => {
+  const { name, currency } = req.body || {};
+  if (name !== undefined && (typeof name !== 'string' || name.trim().length > 100)) {
+    return res.status(400).json({ error: 'name must be a string up to 100 characters' });
   }
-  if (email !== undefined) {
-    if (typeof email !== 'string' || email.length > 200) {
-      return res.status(400).json({ error: 'email must be a string up to 200 characters' });
-    }
-    await setSetting('profile_email', email.trim());
+  if (currency !== undefined && !CURRENCIES.has(currency)) {
+    return res.status(400).json({ error: 'unsupported currency' });
   }
-  res.json({
-    name: (await getSetting('profile_name')) || '',
-    email: (await getSetting('profile_email')) || '',
-    currency: (await getSetting('profile_currency')) || 'GH₵',
-  });
+  const sets = [];
+  const vals = [];
+  if (name !== undefined) { sets.push('name = ?'); vals.push(name.trim()); }
+  if (currency !== undefined) { sets.push('currency = ?'); vals.push(currency); }
+  if (sets.length) {
+    await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).run(...vals, req.user.id);
+  }
+  const user = await db.prepare(
+    'SELECT id, email, name, currency, income_type, income_frequency, onboarded FROM users WHERE id = ?'
+  ).get(req.user.id);
+  res.json({ user: publicUser(user) });
 });
 
-app.post('/api/reports/delete', requireAuth, async (req, res) => {
-  const { scope, month } = req.body;
-  let info;
-  if (scope === 'all') {
-    info = await db.prepare('DELETE FROM transactions').run();
-  } else if (scope === 'month') {
-    if (typeof month !== 'string' || !MONTH_RE.test(month)) {
-      return res.status(400).json({ error: 'month must be YYYY-MM' });
-    }
-    info = await db.prepare("DELETE FROM transactions WHERE substr(date, 1, 7) = ?").run(month);
-  } else {
-    return res.status(400).json({ error: "scope must be 'all' or 'month'" });
-  }
-  res.json({ deleted: info.changes });
-});
+/* ---------------- Categories ---------------- */
 
 app.get('/api/categories', requireAuth, async (req, res) => {
-  const rows = await db.prepare('SELECT * FROM categories ORDER BY name').all();
+  const rows = await db.prepare(
+    'SELECT * FROM categories WHERE user_id = ? ORDER BY type DESC, name'
+  ).all(req.user.id);
   res.json(rows);
 });
 
 app.post('/api/categories', requireAuth, async (req, res) => {
-  const { name, type, icon } = req.body;
-  if (!name || !type) {
-    return res.status(400).json({ error: 'name and type are required' });
-  }
+  const { name, type, icon } = req.body || {};
+  if (!name || !type) return res.status(400).json({ error: 'name and type are required' });
   if (!['income', 'expense'].includes(type)) {
     return res.status(400).json({ error: 'type must be income or expense' });
   }
   try {
+    const trimmed = name.trim().slice(0, 60);
     const info = await db
-      .prepare('INSERT INTO categories (name, type, icon) VALUES (?, ?, ?)')
-      .run(name, type, icon || null);
-    res.status(201).json({ id: info.lastInsertRowid, name, type, icon: icon || null });
+      .prepare('INSERT INTO categories (user_id, name, type, icon) VALUES (?, ?, ?, ?)')
+      .run(req.user.id, trimmed, type, icon || null);
+    res.status(201).json({ id: info.lastInsertRowid, user_id: req.user.id, name: trimmed, type, icon: icon || null });
   } catch (err) {
-    if (err.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'category already exists' });
-    }
+    if (err.message.includes('UNIQUE')) return res.status(409).json({ error: 'You already have a category with this name' });
+    throw err;
+  }
+});
+
+app.put('/api/categories/:id', requireAuth, async (req, res) => {
+  const { name, type, icon } = req.body || {};
+  const existing = await db.prepare(
+    'SELECT * FROM categories WHERE id = ? AND user_id = ?'
+  ).get(req.params.id, req.user.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  const updated = {
+    name: name !== undefined ? name.trim().slice(0, 60) : existing.name,
+    type: type !== undefined ? type : existing.type,
+    icon: icon !== undefined ? icon : existing.icon,
+  };
+  if (!updated.name) return res.status(400).json({ error: 'name cannot be empty' });
+  if (!['income', 'expense'].includes(updated.type)) {
+    return res.status(400).json({ error: 'type must be income or expense' });
+  }
+  try {
+    await db.prepare('UPDATE categories SET name = ?, type = ?, icon = ? WHERE id = ? AND user_id = ?').run(
+      updated.name, updated.type, updated.icon || null, req.params.id, req.user.id
+    );
+    res.json({ id: Number(req.params.id), ...updated, icon: updated.icon || null });
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) return res.status(409).json({ error: 'You already have a category with this name' });
     throw err;
   }
 });
 
 app.delete('/api/categories/:id', requireAuth, async (req, res) => {
-  const used = await db
-    .prepare('SELECT COUNT(*) AS n FROM transactions WHERE category_id = ?')
-    .get(req.params.id);
-  if (used.n > 0) {
-    return res.status(409).json({ error: 'category is used by transactions' });
-  }
-  const budgeted = await db
-    .prepare('SELECT COUNT(*) AS n FROM budgets WHERE category_id = ?')
-    .get(req.params.id);
-  if (budgeted.n > 0) {
-    return res.status(409).json({ error: 'category is used by budgets' });
-  }
-  const info = await db.prepare('DELETE FROM categories WHERE id = ?').run(req.params.id);
-  if (info.changes === 0) return res.status(404).json({ error: 'not found' });
+  const cat = await db.prepare('SELECT * FROM categories WHERE id = ? AND user_id = ?').get(req.params.id, req.user.id);
+  if (!cat) return res.status(404).json({ error: 'not found' });
+  const used = await db.prepare(
+    'SELECT COUNT(*) AS n FROM transactions WHERE category_id = ? AND user_id = ?'
+  ).get(req.params.id, req.user.id);
+  if (used.n > 0) return res.status(409).json({ error: 'This category is used by transactions' });
+  const budgeted = await db.prepare(
+    'SELECT COUNT(*) AS n FROM budgets WHERE category_id = ? AND user_id = ?'
+  ).get(req.params.id, req.user.id);
+  if (budgeted.n > 0) return res.status(409).json({ error: 'This category is used by budgets' });
+  await db.prepare('DELETE FROM categories WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
   res.status(204).end();
 });
 
-app.put('/api/categories/:id', requireAuth, async (req, res) => {
-  const { name, type, icon } = req.body;
-  const existing = await db.prepare('SELECT * FROM categories WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'not found' });
-  const updated = {
-    name: name !== undefined ? name : existing.name,
-    type: type !== undefined ? type : existing.type,
-    icon: icon !== undefined ? icon : existing.icon,
-  };
-  if (!updated.name) {
-    return res.status(400).json({ error: 'name cannot be empty' });
-  }
-  if (!['income', 'expense'].includes(updated.type)) {
-    return res.status(400).json({ error: 'type must be income or expense' });
-  }
-  try {
-    await db.prepare('UPDATE categories SET name = ?, type = ?, icon = ? WHERE id = ?').run(
-      updated.name,
-      updated.type,
-      updated.icon || null,
-      req.params.id
-    );
-    res.json({ id: Number(req.params.id), ...updated, icon: updated.icon || null });
-  } catch (err) {
-    if (err.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'category already exists' });
-    }
-    throw err;
-  }
-});
+/* ---------------- Transactions ---------------- */
 
 app.get('/api/transactions', requireAuth, async (req, res) => {
-  const { month } = req.query;
+  const { type, category_id, period_id } = req.query;
   let sql =
     'SELECT t.*, c.name AS category_name, c.icon AS category_icon ' +
-    'FROM transactions t LEFT JOIN categories c ON c.id = t.category_id ';
-  const params = [];
-  if (month) {
-    sql += 'WHERE substr(t.date, 1, 7) = ? ';
-    params.push(month);
+    'FROM transactions t LEFT JOIN categories c ON c.id = t.category_id ' +
+    'WHERE t.user_id = ?';
+  const params = [req.user.id];
+  if (type === 'income' || type === 'expense') {
+    sql += ' AND t.type = ?';
+    params.push(type);
   }
-  sql += 'ORDER BY t.date DESC, t.id DESC';
+  if (category_id) {
+    sql += ' AND t.category_id = ?';
+    params.push(category_id);
+  }
+  if (period_id) {
+    const period = await db.prepare('SELECT * FROM budget_periods WHERE id = ? AND user_id = ?').get(period_id, req.user.id);
+    if (!period) return res.status(404).json({ error: 'period not found' });
+    sql += ' AND t.date BETWEEN ? AND ?';
+    params.push(period.start_date, period.end_date);
+  }
+  sql += ' ORDER BY t.date DESC, t.id DESC';
   res.json(await db.prepare(sql).all(...params));
 });
 
 app.post('/api/transactions', requireAuth, async (req, res) => {
-  const { amount, date, type, category_id, note } = req.body;
+  const { amount, date, type, category_id, note } = req.body || {};
   if (amount == null || !date || !type) {
     return res.status(400).json({ error: 'amount, date and type are required' });
   }
@@ -360,30 +370,26 @@ app.post('/api/transactions', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'type must be income or expense' });
   }
   if (!DATE_RE.test(date)) {
-    return res.status(400).json({ error: 'date must be a valid YYYY-MM-DD date' });
+    return res.status(400).json({ error: 'enter a valid date' });
   }
   if (category_id != null) {
-    const cat = await db.prepare('SELECT id FROM categories WHERE id = ?').get(category_id);
-    if (!cat) return res.status(400).json({ error: 'invalid category_id' });
+    const cat = await db.prepare('SELECT id FROM categories WHERE id = ? AND user_id = ?').get(category_id, req.user.id);
+    if (!cat) return res.status(400).json({ error: 'invalid category' });
   }
   const info = await db
-    .prepare(
-      'INSERT INTO transactions (amount, date, type, category_id, note) VALUES (?, ?, ?, ?, ?)'
-    )
-    .run(amount, date, type, category_id ?? null, note || null);
+    .prepare('INSERT INTO transactions (user_id, amount, date, type, category_id, note) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(req.user.id, amount, date, type, category_id ?? null, cleanNote(note));
   res.status(201).json({
-    id: info.lastInsertRowid,
-    amount,
-    date,
-    type,
-    category_id: category_id ?? null,
-    note: note || null,
+    id: info.lastInsertRowid, user_id: req.user.id, amount, date, type,
+    category_id: category_id ?? null, note: cleanNote(note),
   });
 });
 
 app.put('/api/transactions/:id', requireAuth, async (req, res) => {
-  const { amount, date, type, category_id, note } = req.body;
-  const existing = await db.prepare('SELECT * FROM transactions WHERE id = ?').get(req.params.id);
+  const { amount, date, type, category_id, note } = req.body || {};
+  const existing = await db.prepare(
+    'SELECT * FROM transactions WHERE id = ? AND user_id = ?'
+  ).get(req.params.id, req.user.id);
   if (!existing) return res.status(404).json({ error: 'not found' });
   if (amount !== undefined && (typeof amount !== 'number' || amount <= 0)) {
     return res.status(400).json({ error: 'amount must be a positive number' });
@@ -392,79 +398,383 @@ app.put('/api/transactions/:id', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'type must be income or expense' });
   }
   if (date !== undefined && !DATE_RE.test(date)) {
-    return res.status(400).json({ error: 'date must be a valid YYYY-MM-DD date' });
+    return res.status(400).json({ error: 'enter a valid date' });
   }
   const updated = {
     amount: amount ?? existing.amount,
     date: date ?? existing.date,
     type: type ?? existing.type,
     category_id: category_id !== undefined ? category_id : existing.category_id,
-    note: note !== undefined ? note : existing.note,
+    note: note !== undefined ? cleanNote(note) : existing.note,
   };
-  if (category_id != null) {
-    const cat = await db.prepare('SELECT id FROM categories WHERE id = ?').get(category_id);
-    if (!cat) return res.status(400).json({ error: 'invalid category_id' });
+  if (updated.category_id != null) {
+    const cat = await db.prepare('SELECT id FROM categories WHERE id = ? AND user_id = ?').get(updated.category_id, req.user.id);
+    if (!cat) return res.status(400).json({ error: 'invalid category' });
   }
   await db.prepare(
-    'UPDATE transactions SET amount = ?, date = ?, type = ?, category_id = ?, note = ? WHERE id = ?'
-  ).run(updated.amount, updated.date, updated.type, updated.category_id, updated.note, req.params.id);
+    'UPDATE transactions SET amount = ?, date = ?, type = ?, category_id = ?, note = ? WHERE id = ? AND user_id = ?'
+  ).run(updated.amount, updated.date, updated.type, updated.category_id, updated.note, req.params.id, req.user.id);
   res.json({ id: Number(req.params.id), ...updated });
 });
 
 app.delete('/api/transactions/:id', requireAuth, async (req, res) => {
-  const info = await db.prepare('DELETE FROM transactions WHERE id = ?').run(req.params.id);
+  const info = await db.prepare(
+    'DELETE FROM transactions WHERE id = ? AND user_id = ?'
+  ).run(req.params.id, req.user.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
 });
 
-app.get('/api/budgets', requireAuth, async (req, res) => {
-  const { month } = req.query;
-  let sql =
-    'SELECT b.*, c.name AS category_name, c.icon AS category_icon ' +
-    'FROM budgets b LEFT JOIN categories c ON c.id = b.category_id ';
-  const params = [];
-  if (month) {
-    sql += 'WHERE b.month = ? ';
-    params.push(month);
+/* ---------------- Budget periods ---------------- */
+
+function computePeriodStatus(period, spent) {
+  const today = todayStr();
+  const daysTotal = daysBetween(period.start_date, period.end_date) + 1;
+  const daysElapsed = Math.max(1, daysBetween(period.start_date, today) + 1);
+  const daysRemaining = Math.max(0, daysBetween(today, period.end_date));
+  const available = period.amount - spent;
+  const plannedRate = period.amount / Math.max(1, daysTotal);
+  const pace = spent / daysElapsed;
+  const safePerDay = daysRemaining > 0 ? Math.max(0, available) / daysRemaining : 0;
+
+  let tone = 'green';
+  let title = "You're on track.";
+  let message = 'Keep it up.';
+  if (spent >= period.amount) {
+    tone = 'red';
+    title = 'This budget is spent.';
+    message = 'You’ve used all the money in this budget period.';
+  } else if (daysRemaining <= 0) {
+    tone = spent <= period.amount ? 'green' : 'red';
+    title = 'This budget period has ended.';
+    message = 'Add your next income to start a new one.';
+  } else if (pace * daysRemaining > available) {
+    tone = 'red';
+    title = 'Careful — you may run out.';
+    message = 'At your current pace, you could run out before your next income.';
+  } else if (pace > plannedRate * 1.05) {
+    tone = 'yellow';
+    title = 'You’re spending a little faster than planned.';
+    message = 'Try slowing down a bit to stay within your budget.';
+  } else {
+    tone = 'green';
+    title = 'You’re on track.';
+    message = 'Your spending is within your planned budget.';
   }
-  sql += 'ORDER BY b.month DESC, c.name';
-  res.json(await db.prepare(sql).all(...params));
+
+  return {
+    tone,
+    title,
+    message,
+    available,
+    daysTotal,
+    daysElapsed,
+    daysRemaining,
+    plannedRate,
+    pace,
+    safePerDay,
+  };
+}
+
+async function currentPeriod(userId) {
+  return db.prepare(
+    'SELECT * FROM budget_periods WHERE user_id = ? ORDER BY start_date DESC, id DESC LIMIT 1'
+  ).get(userId);
+}
+
+app.get('/api/periods', requireAuth, async (req, res) => {
+  const periods = await db.prepare(
+    'SELECT * FROM budget_periods WHERE user_id = ? ORDER BY start_date DESC, id DESC'
+  ).all(req.user.id);
+  const current = await currentPeriod(req.user.id);
+  const result = [];
+  for (const p of periods) {
+    const spentRows = await db.prepare(
+      'SELECT COALESCE(SUM(amount), 0) AS s FROM transactions WHERE user_id = ? AND type = ? AND date BETWEEN ? AND ?'
+    ).get(req.user.id, 'expense', p.start_date, p.end_date);
+    result.push({ ...p, spent: spentRows.s, ...computePeriodStatus(p, spentRows.s) });
+  }
+  res.json({ periods: result, currentId: current ? current.id : null });
+});
+
+app.post('/api/income', requireAuth, async (req, res) => {
+  const { amount, date, category_id, note, end_date, period_days } = req.body || {};
+  if (amount == null || !date) {
+    return res.status(400).json({ error: 'amount and date are required' });
+  }
+  if (typeof amount !== 'number' || amount <= 0) {
+    return res.status(400).json({ error: 'amount must be a positive number' });
+  }
+  if (!DATE_RE.test(date)) return res.status(400).json({ error: 'enter a valid date' });
+  if (category_id != null) {
+    const cat = await db.prepare(
+      'SELECT id FROM categories WHERE id = ? AND user_id = ? AND type = ?'
+    ).get(category_id, req.user.id, 'income');
+    if (!cat) return res.status(400).json({ error: 'invalid income category' });
+  }
+
+  let finalEnd = null;
+  if (end_date) {
+    if (!DATE_RE.test(end_date)) return res.status(400).json({ error: 'enter a valid end date' });
+    if (end_date <= date) return res.status(400).json({ error: 'end date must be after the income date' });
+    finalEnd = end_date;
+  } else if (period_days != null) {
+    if (typeof period_days !== 'number' || period_days < 1 || period_days > 365) {
+      return res.status(400).json({ error: 'invalid period length' });
+    }
+    finalEnd = addDays(date, period_days - 1);
+  }
+
+  const txInfo = await db
+    .prepare('INSERT INTO transactions (user_id, amount, date, type, category_id, note) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(req.user.id, amount, date, 'income', category_id ?? null, cleanNote(note));
+
+  let period = null;
+  if (finalEnd) {
+    const pInfo = await db
+      .prepare('INSERT INTO budget_periods (user_id, amount, start_date, end_date) VALUES (?, ?, ?, ?)')
+      .run(req.user.id, amount, date, finalEnd);
+    period = { id: pInfo.lastInsertRowid, user_id: req.user.id, amount, start_date: date, end_date: finalEnd };
+  }
+
+  res.status(201).json({
+    transaction: { id: txInfo.lastInsertRowid, amount, date, type: 'income', category_id: category_id ?? null, note: cleanNote(note) },
+    period,
+  });
+});
+
+app.delete('/api/periods/:id', requireAuth, async (req, res) => {
+  const period = await db.prepare(
+    'SELECT * FROM budget_periods WHERE id = ? AND user_id = ?'
+  ).get(req.params.id, req.user.id);
+  if (!period) return res.status(404).json({ error: 'not found' });
+  await db.prepare('DELETE FROM budgets WHERE budget_period_id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  await db.prepare('DELETE FROM budget_periods WHERE id = ? AND user_id = ?').run(req.params.id, req.user.id);
+  res.status(204).end();
+});
+
+/* ---------------- Budgets ---------------- */
+
+app.get('/api/budgets', requireAuth, async (req, res) => {
+  const { period_id } = req.query;
+  let pid = period_id;
+  if (!pid) {
+    const cur = await currentPeriod(req.user.id);
+    pid = cur ? cur.id : null;
+  }
+  if (!pid) return res.json({ budgets: [], totalBudgeted: 0, period: null });
+  const period = await db.prepare('SELECT * FROM budget_periods WHERE id = ? AND user_id = ?').get(pid, req.user.id);
+  if (!period) return res.status(404).json({ error: 'period not found' });
+  const budgets = await db.prepare(
+    'SELECT b.*, c.name AS category_name, c.icon AS category_icon, ' +
+    '(SELECT COALESCE(SUM(t.amount), 0) FROM transactions t ' +
+    ' WHERE t.user_id = b.user_id AND t.type = ? AND t.category_id = b.category_id ' +
+    ' AND t.date BETWEEN ? AND ?) AS spent ' +
+    'FROM budgets b JOIN categories c ON c.id = b.category_id ' +
+    'WHERE b.user_id = ? AND b.budget_period_id = ? ' +
+    'ORDER BY spent DESC'
+  ).all('expense', period.start_date, period.end_date, req.user.id, pid);
+  const totalBudgeted = budgets.reduce((s, b) => s + b.amount, 0);
+  res.json({ budgets, totalBudgeted, period });
 });
 
 app.post('/api/budgets', requireAuth, async (req, res) => {
-  const { category_id, month, limit_amount } = req.body;
-  if (!category_id || !month || limit_amount == null) {
-    return res.status(400).json({ error: 'category_id, month and limit_amount are required' });
+  const { category_id, budget_period_id, amount } = req.body || {};
+  if (!category_id || !budget_period_id || amount == null) {
+    return res.status(400).json({ error: 'category, budget period and amount are required' });
   }
-  if (typeof limit_amount !== 'number' || limit_amount <= 0) {
-    return res.status(400).json({ error: 'limit_amount must be a positive number' });
+  if (typeof amount !== 'number' || amount <= 0) {
+    return res.status(400).json({ error: 'amount must be a positive number' });
   }
-  if (typeof month !== 'string' || !MONTH_RE.test(month)) {
-    return res.status(400).json({ error: 'month must be a valid YYYY-MM month' });
-  }
-  const cat = await db.prepare('SELECT id FROM categories WHERE id = ?').get(category_id);
-  if (!cat) return res.status(400).json({ error: 'invalid category_id' });
-  const income = await monthIncome(month);
+  const period = await db.prepare(
+    'SELECT * FROM budget_periods WHERE id = ? AND user_id = ?'
+  ).get(budget_period_id, req.user.id);
+  if (!period) return res.status(404).json({ error: 'budget period not found' });
+  const cat = await db.prepare(
+    'SELECT id FROM categories WHERE id = ? AND user_id = ? AND type = ?'
+  ).get(category_id, req.user.id, 'expense');
+  if (!cat) return res.status(400).json({ error: 'invalid expense category' });
+
   const existing = await db.prepare(
-    'SELECT SUM(limit_amount) AS total FROM budgets WHERE month = ? AND category_id <> ?'
-  ).get(month, category_id);
-  const otherTotal = existing.total || 0;
-  if (otherTotal + limit_amount > income) {
+    'SELECT * FROM budgets WHERE budget_period_id = ? AND category_id = ?'
+  ).get(budget_period_id, category_id);
+  const currentOther = await db.prepare(
+    'SELECT COALESCE(SUM(amount), 0) AS total FROM budgets WHERE budget_period_id = ? AND category_id <> ?'
+  ).get(budget_period_id, category_id);
+  if (currentOther.total + amount > period.amount) {
     return res.status(400).json({
-      error: `total budgeted (${(otherTotal + limit_amount).toFixed(2)}) exceeds monthly income (${income.toFixed(2)})`,
+      error: `Total budgeted (${(currentOther.total + amount).toFixed(2)}) exceeds this period's income (${period.amount.toFixed(2)})`,
     });
   }
   await db.prepare(
-    'INSERT INTO budgets (category_id, month, limit_amount) VALUES (?, ?, ?) ' +
-      'ON CONFLICT (category_id, month) DO UPDATE SET limit_amount = excluded.limit_amount'
-  ).run(category_id, month, limit_amount);
-  res.status(201).json({ category_id, month, limit_amount });
+    'INSERT INTO budgets (user_id, category_id, amount, budget_period_id) VALUES (?, ?, ?, ?) ' +
+    'ON CONFLICT (budget_period_id, category_id) DO UPDATE SET amount = excluded.amount'
+  ).run(req.user.id, category_id, amount, budget_period_id);
+  res.status(201).json({ category_id, budget_period_id, amount });
 });
 
 app.delete('/api/budgets/:id', requireAuth, async (req, res) => {
-  const info = await db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
+  const info = await db.prepare(
+    'DELETE FROM budgets WHERE id = ? AND user_id = ?'
+  ).run(req.params.id, req.user.id);
   if (info.changes === 0) return res.status(404).json({ error: 'not found' });
   res.status(204).end();
+});
+
+/* ---------------- Overview & insights ---------------- */
+
+app.get('/api/overview', requireAuth, async (req, res) => {
+  const period = await currentPeriod(req.user.id);
+  const cats = await db.prepare(
+    'SELECT id, name, icon, type FROM categories WHERE user_id = ? ORDER BY type DESC, name'
+  ).all(req.user.id);
+
+  const base = {
+    user: publicUser(req.user),
+    categories: cats,
+    period: null,
+    status: null,
+    moneyAvailable: 0,
+    totalIncome: 0,
+    totalExpense: 0,
+    daysTotal: 0,
+    daysElapsed: 0,
+    daysRemaining: 0,
+    safePerDay: 0,
+    plannedPerDay: 0,
+    budget: { totalBudgeted: 0, categories: [] },
+  };
+
+  if (!period) return res.json(base);
+
+  const agg = await db.prepare(
+    "SELECT type, COALESCE(SUM(amount), 0) AS total FROM transactions " +
+    "WHERE user_id = ? AND date BETWEEN ? AND ? GROUP BY type"
+  ).all(req.user.id, period.start_date, period.end_date);
+  const totals = { income: 0, expense: 0 };
+  for (const row of agg) totals[row.type] = row.total;
+  const spent = totals.expense;
+
+  const budgets = await db.prepare(
+    'SELECT b.*, c.name AS category_name, c.icon AS category_icon, ' +
+    '(SELECT COALESCE(SUM(t.amount), 0) FROM transactions t ' +
+    ' WHERE t.user_id = b.user_id AND t.type = ? AND t.category_id = b.category_id ' +
+    ' AND t.date BETWEEN ? AND ?) AS spent ' +
+    'FROM budgets b JOIN categories c ON c.id = b.category_id ' +
+    'WHERE b.user_id = ? AND b.budget_period_id = ? ' +
+    'ORDER BY spent DESC'
+  ).all('expense', period.start_date, period.end_date, req.user.id, period.id);
+
+  const status = computePeriodStatus(period, spent);
+  const budgetCats = [];
+  for (const b of budgets) {
+    const spentRow = await db.prepare(
+      'SELECT COALESCE(SUM(amount), 0) AS s FROM transactions WHERE user_id = ? AND type = ? AND category_id = ? AND date BETWEEN ? AND ?'
+    ).get(req.user.id, 'expense', b.category_id, period.start_date, period.end_date);
+    const spentCat = spentRow.s;
+    const pct = b.amount > 0 ? (spentCat / b.amount) * 100 : 0;
+    const catStatus = spentCat > b.amount ? 'over' : pct >= 80 ? 'close' : 'safe';
+    budgetCats.push({
+      id: b.id,
+      category_id: b.category_id,
+      name: b.category_name,
+      icon: b.category_icon,
+      amount: b.amount,
+      spent: spentCat,
+      remaining: b.amount - spentCat,
+      pct,
+      status: catStatus,
+    });
+  }
+  const totalBudgeted = budgets.reduce((s, b) => s + b.amount, 0);
+
+  res.json({
+    user: publicUser(req.user),
+    categories: cats,
+    period,
+    status,
+    moneyAvailable: status.available,
+    totalIncome: totals.income,
+    totalExpense: spent,
+    daysTotal: status.daysTotal,
+    daysElapsed: status.daysElapsed,
+    daysRemaining: status.daysRemaining,
+    safePerDay: status.safePerDay,
+    plannedPerDay: status.plannedRate,
+    budget: { totalBudgeted, categories: budgetCats },
+  });
+});
+
+app.get('/api/insights', requireAuth, async (req, res) => {
+  const insights = [];
+  const period = await currentPeriod(req.user.id);
+  let periodSpent = 0;
+  const tx = await db.prepare(
+    'SELECT t.*, c.name AS category_name, c.icon AS category_icon FROM transactions t ' +
+    'LEFT JOIN categories c ON c.id = t.category_id WHERE t.user_id = ? ORDER BY t.date DESC'
+  ).all(req.user.id);
+
+  if (!period && tx.length === 0) {
+    return res.json([{ icon: '👋', tone: 'neutral', text: 'Add your income to get started and see how your money is doing.' }]);
+  }
+
+  if (period) {
+    const spentRows = await db.prepare(
+      'SELECT COALESCE(SUM(amount), 0) AS s FROM transactions WHERE user_id = ? AND type = ? AND date BETWEEN ? AND ?'
+    ).get(req.user.id, 'expense', period.start_date, period.end_date);
+    const spent = spentRows.s;
+    periodSpent = spent;
+    const remaining = period.amount - spent;
+    if (remaining > 0) {
+      insights.push({ icon: '💰', tone: 'neutral', text: `You have ${req.user.currency}${remaining.toFixed(2)} remaining for this budget period.` });
+    }
+
+    const cats = await db.prepare(
+      'SELECT category_id, category_name, category_icon, amount, spent FROM ' +
+      '(SELECT b.category_id, c.name AS category_name, c.icon AS category_icon, b.amount, ' +
+      '(SELECT COALESCE(SUM(t.amount), 0) FROM transactions t WHERE t.user_id = b.user_id AND t.type = ? AND t.category_id = b.category_id AND t.date BETWEEN ? AND ?) AS spent ' +
+      'FROM budgets b JOIN categories c ON c.id = b.category_id WHERE b.user_id = ? AND b.budget_period_id = ?)'
+    ).all('expense', period.start_date, period.end_date, req.user.id, period.id);
+
+    const biggest = cats.slice().sort((a, b) => b.spent - a.spent)[0];
+    if (biggest && biggest.spent > 0) {
+      insights.push({ icon: biggest.category_icon || '🍔', tone: 'neutral', text: `${biggest.category_name} is your biggest expense this period (${req.user.currency}${biggest.spent.toFixed(2)}).` });
+    }
+
+    for (const c of cats) {
+      if (c.spent > c.amount) {
+        insights.push({ icon: '⚠️', tone: 'danger', text: `You've gone over your ${c.category_name} budget by ${req.user.currency}${(c.spent - c.amount).toFixed(2)}.` });
+      } else if (c.amount > 0 && (c.spent / c.amount) >= 0.8) {
+        insights.push({ icon: '⚠️', tone: 'warn', text: `You've used ${Math.round((c.spent / c.amount) * 100)}% of your ${c.category_name} budget (${req.user.currency}${c.spent.toFixed(2)} / ${req.user.currency}${c.amount.toFixed(2)}).` });
+      }
+    }
+  }
+
+  const today = todayStr();
+  const thisWeek = tx.filter((t) => t.type === 'expense' && t.date >= addDays(today, -6));
+  const lastWeek = tx.filter((t) => t.type === 'expense' && t.date >= addDays(today, -13) && t.date < addDays(today, -6));
+  const thisTotal = thisWeek.reduce((s, t) => s + t.amount, 0);
+  const lastTotal = lastWeek.reduce((s, t) => s + t.amount, 0);
+  if (thisWeek.length || lastWeek.length) {
+    if (thisTotal > lastTotal && lastTotal > 0) {
+      insights.push({ icon: '📈', tone: 'warn', text: `You spent ${req.user.currency}${(thisTotal - lastTotal).toFixed(2)} more this week than last week.` });
+    } else if (lastTotal > thisTotal && lastTotal > 0) {
+      insights.push({ icon: '🟢', tone: 'good', text: `Nice work — you spent ${req.user.currency}${(lastTotal - thisTotal).toFixed(2)} less this week than last week.` });
+    }
+  }
+
+  if (period) {
+    const status = computePeriodStatus(period, periodSpent);
+    if (status.tone === 'green') {
+      insights.push({ icon: '🟢', tone: 'good', text: 'Your spending is currently within your planned budget.' });
+    } else if (status.tone === 'yellow') {
+      insights.push({ icon: '🟡', tone: 'warn', text: 'You’re spending a little faster than planned this period.' });
+    } else if (status.tone === 'red') {
+      insights.push({ icon: '🔴', tone: 'danger', text: 'Your current spending rate may cause you to run out before this period ends.' });
+    }
+  }
+
+  res.json(insights);
 });
 
 app.use((req, res) => {
