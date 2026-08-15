@@ -1047,17 +1047,11 @@ async function buildAiData(userId, user) {
     data.period = {
       startDate: period.start_date,
       endDate: period.end_date,
-      daysTotal: status.daysTotal,
-      daysElapsed: status.daysElapsed,
-      daysRemaining: status.daysRemaining,
     };
     data.budget = {
       total: round2(period.amount),
       spent: round2(periodSpent),
       remaining: round2(period.amount - periodSpent),
-      plannedPerDay: round2(status.plannedRate),
-      actualPerDay: round2(status.pace),
-      safePerDay: round2(status.safePerDay),
       paceStatus: status.tone,
     };
     data.hasMeaningfulData = periodSpent >= 20 && periodExpenses.length >= 2;
@@ -1173,7 +1167,10 @@ const AI_SYSTEM_PROMPT = [
   'RULES:',
   '- Use ONLY the financial data supplied by the application in the JSON below. Never invent income, expenses, transactions, budgets, or statistics.',
   '- All numbers in the input are computed and verified by the app. Do not recompute them. You may do arithmetic on supplied numbers, but never add new facts.',
-  '- If there is too little data to support a claim (for example, no budget period, no historical months), say so honestly instead of guessing.',
+  '- THE USER\'S BUDGET IS THE SOURCE OF TRUTH. The budget they set decides how much they can spend and on what. Base every observation and recommendation on how actual spending compares to the total budget and to each category budget.',
+  '- Do NOT tell the user how much they should spend per day for the rest of the period, and do not invent a "daily limit" or "safe daily spend". Never extrapolate a per-day allowance from the remaining budget.',
+  '- Highlight which categories are within budget, close to their budget, or over budget, and by how much.',
+  '- If there is too little data to support a claim (for example, no budget period, no budgets set for categories, no historical months), say so honestly instead of guessing.',
   '- Clearly distinguish observations ("what happened" / "what pattern to notice") from recommendations ("what to do next"). Observations must reference real numbers from the data.',
   '- When spending looks risky, explain the risk calmly and clearly. Never be alarmist or preachy.',
   '- Do not fabricate the user\'s identity, habits, or context beyond what is provided.',
@@ -1181,9 +1178,9 @@ const AI_SYSTEM_PROMPT = [
   '',
   'Respond with ONLY a single valid JSON object (no markdown, no text outside the JSON) with exactly this shape:',
   '{ "summary": string, "insights": [{ "title": string, "description": string, "severity": "info"|"good"|"warning"|"danger" }], "recommendations": [string] }',
-  '- summary: 1 to 3 sentences naming the most important pattern.',
-  '- insights: 1 to 4 items. severity "warning" or "danger" only when the data genuinely supports a concern.',
-  '- recommendations: 1 to 3 practical, specific actions.',
+  '- summary: 1 to 3 sentences naming the most important pattern, comparing spending against the user\'s budget.',
+  '- insights: 1 to 4 items. severity "warning" or "danger" only when the data genuinely supports a concern (for example a category is over or near its budget).',
+  '- recommendations: 1 to 3 practical, specific actions tied to the user\'s budgets, such as moving spending to categories with remaining budget or adjusting a category budget.',
   '- If the data is too thin to support meaningful insights, say so in summary and return an empty insights array.',
 ].join('\n');
 
