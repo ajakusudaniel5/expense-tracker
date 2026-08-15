@@ -789,7 +789,7 @@ app.use((err, req, res, next) => {
 init()
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`Expense tracker running at http://localhost:${PORT}`);
+      console.log(`StayOn running at http://localhost:${PORT}`);
     });
   })
   .catch((err) => {
