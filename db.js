@@ -23,8 +23,7 @@ const SCHEMA = `
     amount REAL NOT NULL,
     start_date TEXT NOT NULL,
     end_date TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS categories (
@@ -33,8 +32,7 @@ const SCHEMA = `
     name TEXT NOT NULL,
     type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
     icon TEXT,
-    UNIQUE (user_id, name),
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    UNIQUE (user_id, name)
   );
 
   CREATE TABLE IF NOT EXISTS transactions (
@@ -123,34 +121,15 @@ async function migrateLegacy() {
 
   console.log('Migrating legacy single-user database to multi-user schema...');
 
-  await client.execute('PRAGMA foreign_keys = OFF');
+  // Runs inside a single transaction so a failure rolls everything back.
+  // Table rebuilds use an FK-safe ordering (drop child tables before the parent)
+  // and never rely on PRAGMA foreign_keys, so they work whether or not foreign
+  // keys are enforced (e.g. Turso remote connections).
   await client.execute('BEGIN');
   try {
     await prepare('DROP TABLE IF EXISTS settings').run();
 
     if (!catsMigrated) {
-      await prepare(
-        `CREATE TABLE categories_new (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          user_id INTEGER NOT NULL DEFAULT 0,
-          name TEXT NOT NULL,
-          type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
-          icon TEXT,
-          UNIQUE (user_id, name)
-        )`
-      ).run();
-      await prepare(
-        'INSERT INTO categories_new (id, user_id, name, type, icon) SELECT id, 0, name, type, icon FROM categories'
-      ).run();
-      await prepare('DROP TABLE categories').run();
-      await prepare('ALTER TABLE categories_new RENAME TO categories').run();
-    }
-
-    if (!txsMigrated) {
-      await prepare('ALTER TABLE transactions ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0').run();
-    }
-
-    if (!budgetsMigrated) {
       const monthRows = await prepare('SELECT DISTINCT month FROM budgets').all();
       const monthToPeriodId = {};
       for (const { month } of monthRows) {
@@ -165,33 +144,113 @@ async function migrateLegacy() {
       }
 
       const oldBudgets = await prepare('SELECT * FROM budgets').all();
-      await prepare('DROP TABLE budgets').run();
+
+      await prepare('ALTER TABLE categories RENAME TO categories_old').run();
       await prepare(
-        `CREATE TABLE budgets (
+        `CREATE TABLE categories (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL DEFAULT 0,
+          name TEXT NOT NULL,
+          type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+          icon TEXT,
+          UNIQUE (user_id, name)
+        )`
+      ).run();
+      await prepare(
+        'INSERT INTO categories (id, user_id, name, type, icon) SELECT id, 0, name, type, icon FROM categories_old'
+      ).run();
+
+      await prepare(
+        `CREATE TABLE transactions_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL DEFAULT 0,
+          amount REAL NOT NULL,
+          date TEXT NOT NULL,
+          type TEXT NOT NULL CHECK (type IN ('income', 'expense')),
+          category_id INTEGER,
+          note TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (category_id) REFERENCES categories(id)
+        )`
+      ).run();
+      await prepare(
+        'INSERT INTO transactions_new (id, user_id, amount, date, type, category_id, note, created_at) ' +
+        'SELECT id, 0, amount, date, type, category_id, note, created_at FROM transactions'
+      ).run();
+
+      await prepare(
+        `CREATE TABLE budgets_new (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id INTEGER NOT NULL DEFAULT 0,
           category_id INTEGER NOT NULL,
           amount REAL NOT NULL,
           budget_period_id INTEGER NOT NULL,
-          UNIQUE (budget_period_id, category_id)
+          UNIQUE (budget_period_id, category_id),
+          FOREIGN KEY (category_id) REFERENCES categories(id),
+          FOREIGN KEY (budget_period_id) REFERENCES budget_periods(id)
         )`
       ).run();
       for (const b of oldBudgets) {
         const pid = monthToPeriodId[b.month];
         if (pid == null) continue;
         await prepare(
-          'INSERT INTO budgets (user_id, category_id, amount, budget_period_id) VALUES (0, ?, ?, ?)'
-        ).run(b.category_id, b.limit_amount, pid);
+          'INSERT INTO budgets_new (id, user_id, category_id, amount, budget_period_id) VALUES (?, 0, ?, ?, ?)'
+        ).run(b.id, b.category_id, b.limit_amount, pid);
+      }
+
+      await prepare('DROP TABLE transactions').run();
+      await prepare('DROP TABLE budgets').run();
+      await prepare('ALTER TABLE transactions_new RENAME TO transactions').run();
+      await prepare('ALTER TABLE budgets_new RENAME TO budgets').run();
+      await prepare('DROP TABLE categories_old').run();
+    } else {
+      if (!txsMigrated) {
+        await prepare('ALTER TABLE transactions ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0').run();
+      }
+      if (!budgetsMigrated) {
+        const monthRows = await prepare('SELECT DISTINCT month FROM budgets').all();
+        const monthToPeriodId = {};
+        for (const { month } of monthRows) {
+          const incomeRows = await prepare(
+            "SELECT amount FROM transactions WHERE type = 'income' AND substr(date, 1, 7) = ?"
+          ).all(month);
+          const income = incomeRows.reduce((s, r) => s + r.amount, 0);
+          const periodInfo = await prepare(
+            'INSERT INTO budget_periods (user_id, amount, start_date, end_date) VALUES (?, ?, ?, ?)'
+          ).run(0, income, `${month}-01`, await lastDayOfMonth(month));
+          monthToPeriodId[month] = periodInfo.lastInsertRowid;
+        }
+
+        const oldBudgets = await prepare('SELECT * FROM budgets').all();
+        await prepare(
+          `CREATE TABLE budgets_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL DEFAULT 0,
+            category_id INTEGER NOT NULL,
+            amount REAL NOT NULL,
+            budget_period_id INTEGER NOT NULL,
+            UNIQUE (budget_period_id, category_id),
+            FOREIGN KEY (category_id) REFERENCES categories(id),
+            FOREIGN KEY (budget_period_id) REFERENCES budget_periods(id)
+          )`
+        ).run();
+        for (const b of oldBudgets) {
+          const pid = monthToPeriodId[b.month];
+          if (pid == null) continue;
+          await prepare(
+            'INSERT INTO budgets_new (id, user_id, category_id, amount, budget_period_id) VALUES (?, 0, ?, ?, ?)'
+          ).run(b.id, b.category_id, b.limit_amount, pid);
+        }
+        await prepare('DROP TABLE budgets').run();
+        await prepare('ALTER TABLE budgets_new RENAME TO budgets').run();
       }
     }
 
     await client.execute('COMMIT');
     console.log('Legacy migration complete.');
   } catch (err) {
-    await client.execute('ROLLBACK');
+    await client.execute('ROLLBACK').catch(() => {});
     throw err;
-  } finally {
-    await client.execute('PRAGMA foreign_keys = ON');
   }
 }
 
