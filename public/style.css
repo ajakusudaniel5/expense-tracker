@@ -659,6 +659,8 @@ input[type="number"] {
   border: 1px solid var(--surface-border);
   border-radius: 14px;
   padding: 14px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .cc-label {
@@ -668,11 +670,16 @@ input[type="number"] {
   text-transform: uppercase;
   letter-spacing: 0.8px;
   margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cc-value {
   font-size: 18px;
   font-weight: 700;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 
 .cc-value.ok { color: var(--income); }
