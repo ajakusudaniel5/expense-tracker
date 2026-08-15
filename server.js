@@ -1,7 +1,20 @@
+const fs = require('node:fs');
 const express = require('express');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { db, init, seedDefaultCategories, adoptLegacyData } = require('./db');
+
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+      const m = line.trim().match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+      if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    }
+  }
+} catch (err) {
+  console.error('Failed to load .env:', err.message);
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1244,7 +1257,7 @@ async function callLLM(data) {
   try {
     body = await request({ ...base, response_format: { type: 'json_object' } });
   } catch (err) {
-    body = await request({ ...base, format: 'json' });
+    body = await request(base);
   }
   const content =
     body && body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content;
