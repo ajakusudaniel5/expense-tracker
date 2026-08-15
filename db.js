@@ -14,7 +14,8 @@ const SCHEMA = `
     income_type TEXT,
     income_frequency TEXT,
     onboarded INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_active_at TEXT
   );
 
   CREATE TABLE IF NOT EXISTS budget_periods (
@@ -276,6 +277,9 @@ async function adoptLegacyData(userId) {
 async function init() {
   await client.executeMultiple(SCHEMA);
   await migrateLegacy();
+  if (!(await hasColumn('users', 'last_active_at'))) {
+    await prepare('ALTER TABLE users ADD COLUMN last_active_at TEXT').run();
+  }
 }
 
 module.exports = { db: { prepare, client }, init, seedDefaultCategories, adoptLegacyData };

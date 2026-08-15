@@ -13,6 +13,9 @@ const LOGIN_ATTEMPTS = new Map();
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOGIN_LOCK_MS = 5 * 60 * 1000;
 
+const LAST_ACTIVE_WRITE = new Map();
+const LAST_ACTIVE_THROTTLE_MS = 5 * 60 * 1000;
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-9]|2[0-9]|3[01])-(0[1-9]|[12]\d|3[01])$/;
 const CURRENCIES = new Set(['GH₵', '$', '₦', 'KSh', 'R', '£', '€']);
@@ -97,6 +100,15 @@ async function requireAuth(req, res, next) {
   }
   req.user = user;
   req.token = token;
+  const lastWrite = LAST_ACTIVE_WRITE.get(user.id) || 0;
+  if (Date.now() - lastWrite >= LAST_ACTIVE_THROTTLE_MS) {
+    try {
+      await db.prepare(
+        "UPDATE users SET last_active_at = datetime('now') WHERE id = ?"
+      ).run(user.id);
+      LAST_ACTIVE_WRITE.set(user.id, Date.now());
+    } catch (_) {}
+  }
   next();
 }
 
@@ -122,12 +134,59 @@ app.use((req, res, next) => {
   next();
 });
 
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path.startsWith('/api/')) {
+    const start = Date.now();
+    res.on('finish', () => {
+      console.log(
+        `${new Date().toISOString()} ${getIp(req)} ${req.method} ${req.originalUrl} ${res.statusCode} ${Date.now() - start}ms`
+      );
+    });
+  }
+  next();
+});
+
 app.get('/api/health', async (req, res) => {
   try {
     await db.prepare('SELECT 1').get();
     res.json({ status: 'ok', db: 'connected' });
   } catch (err) {
     res.status(503).json({ status: 'error', db: 'disconnected' });
+  }
+});
+
+app.get('/api/stats', requireAuth, async (req, res) => {
+  const admin = String(process.env.ADMIN_EMAIL || '').toLowerCase();
+  if (!admin || req.user.email.toLowerCase() !== admin) {
+    return res.status(403).json({ error: 'not authorized' });
+  }
+  try {
+    const totalUsers = (await db.prepare('SELECT COUNT(*) AS n FROM users').get()).n;
+    const activeToday = (await db.prepare(
+      "SELECT COUNT(*) AS n FROM users WHERE date(last_active_at) = date('now')"
+    ).get()).n;
+    const activeLast24h = (await db.prepare(
+      "SELECT COUNT(*) AS n FROM users WHERE last_active_at >= datetime('now', '-1 day')"
+    ).get()).n;
+    const activeLast7d = (await db.prepare(
+      "SELECT COUNT(*) AS n FROM users WHERE last_active_at >= datetime('now', '-7 day')"
+    ).get()).n;
+    const activeLast30d = (await db.prepare(
+      "SELECT COUNT(*) AS n FROM users WHERE last_active_at >= datetime('now', '-30 day')"
+    ).get()).n;
+    const totalTransactions = (await db.prepare('SELECT COUNT(*) AS n FROM transactions').get()).n;
+    const totalBudgets = (await db.prepare('SELECT COUNT(*) AS n FROM budgets').get()).n;
+    res.json({
+      totalUsers,
+      activeToday,
+      activeLast24h,
+      activeLast7d,
+      activeLast30d,
+      totalTransactions,
+      totalBudgets,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'stats unavailable' });
   }
 });
 

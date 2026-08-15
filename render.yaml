@@ -14,3 +14,5 @@ services:
         value: libsql://expense-database-ajakusudaniel5.aws-us-east-2.turso.io
       - key: TURSO_AUTH_TOKEN
         sync: false
+      - key: ADMIN_EMAIL
+        value: ajakusudaniel5@gmail.com
