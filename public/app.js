@@ -1189,6 +1189,33 @@ function renderAccountCard() {
   card.querySelector('#a-lock').addEventListener('click', () => {
     logout();
   });
+
+  const danger = document.createElement('div');
+  danger.className = 'card section-card danger-zone';
+  danger.innerHTML = `
+    <div class="section-head"><h2>Delete account</h2></div>
+    <p class="muted">This permanently removes all your transactions, budgets, categories, and settings. This cannot be undone.</p>
+    <div class="field"><label for="a-del-password">Confirm with your current password</label><input type="password" id="a-del-password" autocomplete="current-password"></div>
+    <button type="button" class="btn-danger" id="a-delete">Delete account</button>
+    <p id="a-del-msg" class="muted"></p>
+  `;
+  danger.querySelector('#a-delete').addEventListener('click', async () => {
+    const msg = danger.querySelector('#a-del-msg');
+    const pw = danger.querySelector('#a-del-password').value;
+    msg.textContent = '';
+    if (!pw) { msg.textContent = 'Enter your password to confirm.'; return; }
+    if (!confirm('Delete your account and all your data? This cannot be undone.')) return;
+    try {
+      await api('/api/auth/account', { method: 'DELETE', body: JSON.stringify({ password: pw }) });
+      state.token = '';
+      localStorage.removeItem('tracker_token');
+      showToast('Account deleted.', 'good');
+      showAuth();
+    } catch (err) {
+      msg.textContent = err.message;
+    }
+  });
+  card.appendChild(danger);
   return card;
 }
 

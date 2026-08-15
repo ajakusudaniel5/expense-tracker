@@ -225,6 +225,33 @@ app.put('/api/auth/password', requireAuth, async (req, res) => {
   res.json({ token: fresh, user: publicUser({ ...req.user, onboarded: req.user.onboarded }) });
 });
 
+app.delete('/api/auth/account', requireAuth, async (req, res) => {
+  const { password } = req.body || {};
+  if (typeof password !== 'string') {
+    return res.status(400).json({ error: 'Enter your current password to delete your account' });
+  }
+  const row = await db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+  if (!verifyPassword(password, row.password_hash)) {
+    return res.status(401).json({ error: 'Current password is incorrect' });
+  }
+  await db.client.execute('BEGIN');
+  try {
+    await db.prepare('DELETE FROM transactions WHERE user_id = ?').run(req.user.id);
+    await db.prepare('DELETE FROM budgets WHERE user_id = ?').run(req.user.id);
+    await db.prepare('DELETE FROM budget_periods WHERE user_id = ?').run(req.user.id);
+    await db.prepare('DELETE FROM categories WHERE user_id = ?').run(req.user.id);
+    await db.prepare('DELETE FROM users WHERE id = ?').run(req.user.id);
+    await db.client.execute('COMMIT');
+  } catch (err) {
+    await db.client.execute('ROLLBACK').catch(() => {});
+    throw err;
+  }
+  for (const [token, session] of SESSIONS) {
+    if (session.userId === req.user.id) SESSIONS.delete(token);
+  }
+  res.status(204).end();
+});
+
 app.put('/api/onboarding', requireAuth, async (req, res) => {
   const { income_type, income_frequency, onboarded } = req.body || {};
   const updates = {};

@@ -527,6 +527,31 @@ input[type="number"] {
   background: var(--bg-soft);
 }
 
+.btn-danger {
+  background: linear-gradient(135deg, #ff6b7a, #f43f5e);
+  color: #fff;
+  border: none;
+  padding: 12px 20px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.2s ease, transform 0.1s ease;
+}
+
+.btn-danger:hover {
+  filter: brightness(1.1);
+}
+
+.btn-danger:active {
+  transform: scale(0.97);
+}
+
+.danger-zone {
+  border-color: rgba(255, 107, 122, 0.35);
+  margin-top: 14px;
+}
+
 .btn-row {
   display: flex;
   gap: 10px;
