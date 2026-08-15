@@ -16,3 +16,9 @@ services:
         sync: false
       - key: ADMIN_EMAIL
         value: ajakusudaniel5@gmail.com
+      - key: LLM_BASE_URL
+        sync: false
+      - key: LLM_MODEL
+        sync: false
+      - key: LLM_API_KEY
+        sync: false

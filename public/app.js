@@ -818,7 +818,94 @@ async function loadInsights() {
     insightCard.appendChild(list);
   }
   page.appendChild(insightCard);
+  renderAiCoach(page);
   renderReports(page, tx);
+}
+
+/* ---------------- AI Financial Coach ---------------- */
+
+function renderAiCoach(page) {
+  const card = document.createElement('div');
+  card.className = 'card section-card ai-coach';
+  card.innerHTML = `
+    <div class="section-head"><h2>✨ AI Financial Coach</h2></div>
+    <div id="ai-coach-body">
+      <button type="button" class="btn-primary" id="ai-generate">Generate AI Insights</button>
+      <p class="muted ai-hint">A personalized read on your spending, based on your real data.</p>
+    </div>
+  `;
+  page.appendChild(card);
+  card.querySelector('#ai-generate').addEventListener('click', () => generateAiInsights(card, false));
+}
+
+async function generateAiInsights(card, force) {
+  const body = card.querySelector('#ai-coach-body');
+  body.innerHTML = `<div class="ai-loading"><span class="spinner"></span> Analyzing your spending…</div>`;
+  let res;
+  try {
+    res = await api('/api/ai-insights', { method: 'POST', body: JSON.stringify(force ? { force: true } : {}) });
+  } catch (err) {
+    body.innerHTML = `<div class="empty">Could not generate AI insights. ${escapeHtml(err.message)}</div>`;
+    return;
+  }
+  if (!res.configured) {
+    body.innerHTML = `<div class="empty">AI insights aren't configured on this server yet.</div>`;
+    return;
+  }
+  renderAiResult(card, res.result);
+}
+
+function renderAiResult(card, result) {
+  const body = card.querySelector('#ai-coach-body');
+  body.innerHTML = '';
+  if (result.summary) {
+    const p = document.createElement('p');
+    p.className = 'ai-summary';
+    p.textContent = result.summary;
+    body.appendChild(p);
+  }
+  if (result.insights && result.insights.length) {
+    const list = document.createElement('div');
+    list.className = 'insight-list ai-insight-list';
+    for (const it of result.insights) {
+      const tone =
+        it.severity === 'danger' ? 'danger' : it.severity === 'warning' ? 'warn' : it.severity === 'good' ? 'good' : 'neutral';
+      const row = document.createElement('div');
+      row.className = `insight-row tone-${tone}`;
+      const ic =
+        tone === 'danger' ? '🔴' : tone === 'warn' ? '🟡' : tone === 'good' ? '🟢' : '💡';
+      row.innerHTML = `
+        <span class="insight-ic">${ic}</span>
+        <div class="ai-insight">
+          <div class="ai-insight-title">${escapeHtml(it.title)}</div>
+          <div class="ai-insight-desc">${escapeHtml(it.description)}</div>
+        </div>
+      `;
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+  }
+  if (result.recommendations && result.recommendations.length) {
+    const rec = document.createElement('div');
+    rec.className = 'ai-rec';
+    const h = document.createElement('h4');
+    h.textContent = 'Recommendations';
+    rec.appendChild(h);
+    const ul = document.createElement('ul');
+    for (const r of result.recommendations) {
+      const li = document.createElement('li');
+      li.textContent = r;
+      ul.appendChild(li);
+    }
+    rec.appendChild(ul);
+    body.appendChild(rec);
+  }
+  const regenerate = document.createElement('button');
+  regenerate.type = 'button';
+  regenerate.className = 'btn-ghost ai-regenerate';
+  regenerate.textContent = '↻ Regenerate';
+  regenerate.addEventListener('click', () => generateAiInsights(card, true));
+  body.appendChild(regenerate);
 }
 
 function pageHead(title) {

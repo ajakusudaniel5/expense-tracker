@@ -950,6 +950,329 @@ app.get('/api/insights', requireAuth, async (req, res) => {
   res.json(insights);
 });
 
+/* ---------------- AI Financial Coach ---------------- */
+
+const LLM_BASE_URL = String(process.env.LLM_BASE_URL || '').trim().replace(/\/+$/, '');
+const LLM_MODEL = String(process.env.LLM_MODEL || '').trim();
+const LLM_API_KEY = String(process.env.LLM_API_KEY || '').trim();
+const LLM_TIMEOUT_MS = Number(process.env.LLM_TIMEOUT_MS || 60000);
+
+const AI_CACHE = new Map();
+const AI_CACHE_TTL_MS = 10 * 60 * 1000;
+const AI_CACHE_MAX = 500;
+
+function aiEnabled() {
+  return Boolean(LLM_BASE_URL && LLM_MODEL);
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+function aiCacheSet(key, result) {
+  AI_CACHE.set(key, { result, expires: Date.now() + AI_CACHE_TTL_MS });
+  if (AI_CACHE.size > AI_CACHE_MAX) {
+    const now = Date.now();
+    for (const [k, v] of AI_CACHE) {
+      if (v.expires <= now) AI_CACHE.delete(k);
+    }
+    if (AI_CACHE.size > AI_CACHE_MAX) {
+      const first = AI_CACHE.keys().next().value;
+      if (first != null) AI_CACHE.delete(first);
+    }
+  }
+}
+
+async function buildAiData(userId, user) {
+  const currency = user.currency || 'GH₵';
+  const period = await currentPeriod(userId);
+  const tx = await db.prepare(
+    'SELECT t.*, c.name AS category_name, c.icon AS category_icon FROM transactions t ' +
+    'LEFT JOIN categories c ON c.id = t.category_id WHERE t.user_id = ? ORDER BY t.date ASC'
+  ).all(userId);
+
+  const data = {
+    currency,
+    period: null,
+    budget: null,
+    categories: [],
+    weekComparison: { thisWeek: 0, lastWeek: 0 },
+    previousPeriod: null,
+    recentMonths: [],
+    incomeByMonth: [],
+    transactionCount: tx.length,
+    hasMeaningfulData: false,
+  };
+
+  const periodExpenses = period
+    ? tx.filter((t) => t.type === 'expense' && t.date >= period.start_date && t.date <= period.end_date)
+    : [];
+  const periodSpent = periodExpenses.reduce((s, t) => s + t.amount, 0);
+  const periodIncome = period
+    ? tx.filter((t) => t.type === 'income' && t.date >= period.start_date && t.date <= period.end_date)
+    : [];
+  const totalIncome = periodIncome.reduce((s, t) => s + t.amount, 0);
+
+  if (period) {
+    const status = computePeriodStatus(period, periodSpent);
+    data.period = {
+      startDate: period.start_date,
+      endDate: period.end_date,
+      daysTotal: status.daysTotal,
+      daysElapsed: status.daysElapsed,
+      daysRemaining: status.daysRemaining,
+    };
+    data.budget = {
+      total: round2(period.amount),
+      spent: round2(periodSpent),
+      remaining: round2(period.amount - periodSpent),
+      plannedPerDay: round2(status.plannedRate),
+      actualPerDay: round2(status.pace),
+      safePerDay: round2(status.safePerDay),
+      paceStatus: status.tone,
+    };
+    data.hasMeaningfulData = periodSpent >= 20 && periodExpenses.length >= 2;
+
+    const budgets = await db.prepare(
+      'SELECT b.*, c.name AS category_name, c.icon AS category_icon FROM budgets b ' +
+      'JOIN categories c ON c.id = b.category_id WHERE b.user_id = ? AND b.budget_period_id = ?'
+    ).all(userId, period.id);
+
+    const spentByCat = {};
+    for (const t of periodExpenses) {
+      const key = t.category_id || 0;
+      if (!spentByCat[key]) {
+        spentByCat[key] = { name: t.category_name || 'Uncategorized', icon: t.category_icon || '💸', spent: 0 };
+      }
+      spentByCat[key].spent += t.amount;
+    }
+
+    const seen = new Set();
+    for (const b of budgets) {
+      seen.add(b.category_id);
+      const spent = spentByCat[b.category_id] ? spentByCat[b.category_id].spent : 0;
+      data.categories.push({
+        name: b.category_name,
+        budget: round2(b.amount),
+        spent: round2(spent),
+        remaining: round2(b.amount - spent),
+        percentOfBudget: b.amount > 0 ? Math.round((spent / b.amount) * 100) : 0,
+        percentOfSpending: periodSpent > 0 ? Math.round((spent / periodSpent) * 100) : 0,
+        amountOverBudget: round2(Math.max(0, spent - b.amount)),
+      });
+    }
+    for (const [key, c] of Object.entries(spentByCat)) {
+      if (seen.has(Number(key))) continue;
+      data.categories.push({
+        name: c.name,
+        budget: 0,
+        spent: round2(c.spent),
+        remaining: round2(-c.spent),
+        percentOfBudget: 0,
+        percentOfSpending: periodSpent > 0 ? Math.round((c.spent / periodSpent) * 100) : 0,
+        amountOverBudget: 0,
+      });
+    }
+    data.categories.sort((a, b) => b.spent - a.spent);
+
+    const prev = await db.prepare(
+      'SELECT * FROM budget_periods WHERE user_id = ? AND start_date < ? ORDER BY start_date DESC LIMIT 1'
+    ).get(userId, period.start_date);
+    if (prev) {
+      const prevSpent = await db.prepare(
+        'SELECT COALESCE(SUM(amount), 0) AS s FROM transactions WHERE user_id = ? AND type = ? AND date BETWEEN ? AND ?'
+      ).get(userId, 'expense', prev.start_date, prev.end_date);
+      data.previousPeriod = {
+        total: round2(prev.amount),
+        spent: round2(prevSpent.s),
+        daysTotal: daysBetween(prev.start_date, prev.end_date) + 1,
+      };
+    }
+  }
+
+  const today = todayStr();
+  const thisWeek = tx.filter((t) => t.type === 'expense' && t.date >= addDays(today, -6));
+  const lastWeek = tx.filter(
+    (t) => t.type === 'expense' && t.date >= addDays(today, -13) && t.date < addDays(today, -6)
+  );
+  data.weekComparison = {
+    thisWeek: round2(thisWeek.reduce((s, t) => s + t.amount, 0)),
+    lastWeek: round2(lastWeek.reduce((s, t) => s + t.amount, 0)),
+  };
+
+  const monthly = {};
+  for (const t of tx) {
+    if (t.type !== 'expense') continue;
+    const m = t.date.slice(0, 7);
+    if (!monthly[m]) monthly[m] = { total: 0, byCategory: {} };
+    monthly[m].total += t.amount;
+    const key = t.category_id || 0;
+    if (!monthly[m].byCategory[key]) {
+      monthly[m].byCategory[key] = { name: t.category_name || 'Uncategorized', amount: 0 };
+    }
+    monthly[m].byCategory[key].amount += t.amount;
+  }
+  data.recentMonths = Object.keys(monthly)
+    .sort()
+    .slice(-6)
+    .map((m) => ({
+      month: m,
+      totalExpense: round2(monthly[m].total),
+      topCategories: Object.entries(monthly[m].byCategory)
+        .sort((a, b) => b[1].amount - a[1].amount)
+        .slice(0, 3)
+        .map(([, c]) => ({ name: c.name, amount: round2(c.amount) })),
+    }));
+
+  const monthlyIncome = {};
+  for (const t of tx) {
+    if (t.type !== 'income') continue;
+    const m = t.date.slice(0, 7);
+    monthlyIncome[m] = (monthlyIncome[m] || 0) + t.amount;
+  }
+  data.incomeByMonth = Object.keys(monthlyIncome)
+    .sort()
+    .slice(-6)
+    .map((m) => ({ month: m, total: round2(monthlyIncome[m]) }));
+
+  return data;
+}
+
+const AI_SYSTEM_PROMPT = [
+  'You are the StayOn AI financial coach. You read a user\'s actual personal finance data and give genuinely helpful, personalized observations and recommendations.',
+  '',
+  'RULES:',
+  '- Use ONLY the financial data supplied by the application in the JSON below. Never invent income, expenses, transactions, budgets, or statistics.',
+  '- All numbers in the input are computed and verified by the app. Do not recompute them. You may do arithmetic on supplied numbers, but never add new facts.',
+  '- If there is too little data to support a claim (for example, no budget period, no historical months), say so honestly instead of guessing.',
+  '- Clearly distinguish observations ("what happened" / "what pattern to notice") from recommendations ("what to do next"). Observations must reference real numbers from the data.',
+  '- When spending looks risky, explain the risk calmly and clearly. Never be alarmist or preachy.',
+  '- Do not fabricate the user\'s identity, habits, or context beyond what is provided.',
+  '- Use the currency symbol provided in the data.',
+  '',
+  'Respond with ONLY a single valid JSON object (no markdown, no text outside the JSON) with exactly this shape:',
+  '{ "summary": string, "insights": [{ "title": string, "description": string, "severity": "info"|"good"|"warning"|"danger" }], "recommendations": [string] }',
+  '- summary: 1 to 3 sentences naming the most important pattern.',
+  '- insights: 1 to 4 items. severity "warning" or "danger" only when the data genuinely supports a concern.',
+  '- recommendations: 1 to 3 practical, specific actions.',
+  '- If the data is too thin to support meaningful insights, say so in summary and return an empty insights array.',
+].join('\n');
+
+function extractJson(content) {
+  let s = String(content || '').trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) s = fence[1].trim();
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error('No JSON object found in LLM response');
+  }
+  return s.slice(start, end + 1);
+}
+
+const AI_SEVERITIES = new Set(['info', 'good', 'warning', 'danger']);
+
+function parseAiResult(content) {
+  const raw = JSON.parse(extractJson(content));
+  const result = { summary: '', insights: [], recommendations: [] };
+  if (raw && typeof raw.summary === 'string') result.summary = raw.summary.trim().slice(0, 1000);
+  if (raw && Array.isArray(raw.insights)) {
+    for (const it of raw.insights.slice(0, 6)) {
+      if (it && typeof it.title === 'string' && typeof it.description === 'string') {
+        result.insights.push({
+          title: it.title.trim().slice(0, 200),
+          description: it.description.trim().slice(0, 600),
+          severity: AI_SEVERITIES.has(it.severity) ? it.severity : 'info',
+        });
+      }
+    }
+  }
+  if (raw && Array.isArray(raw.recommendations)) {
+    for (const r of raw.recommendations.slice(0, 5)) {
+      if (typeof r === 'string' && r.trim()) result.recommendations.push(r.trim().slice(0, 400));
+    }
+  }
+  return result;
+}
+
+async function callLLM(data) {
+  const messages = [
+    { role: 'system', content: AI_SYSTEM_PROMPT },
+    { role: 'user', content: JSON.stringify(data) },
+  ];
+  const headers = { 'Content-Type': 'application/json' };
+  if (LLM_API_KEY) headers.Authorization = `Bearer ${LLM_API_KEY}`;
+
+  const request = async (body) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
+    try {
+      const res = await fetch(`${LLM_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '');
+        throw new Error(`LLM request failed (${res.status}) ${detail.slice(0, 200)}`);
+      }
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const base = { model: LLM_MODEL, messages, temperature: 0.3, stream: false };
+  let body;
+  try {
+    body = await request({ ...base, response_format: { type: 'json_object' } });
+  } catch (err) {
+    body = await request({ ...base, format: 'json' });
+  }
+  const content =
+    body && body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content;
+  if (typeof content !== 'string' || !content.trim()) {
+    throw new Error('LLM returned an empty response');
+  }
+  return parseAiResult(content);
+}
+
+app.post('/api/ai-insights', requireAuth, async (req, res) => {
+  if (!aiEnabled()) {
+    return res.json({ configured: false });
+  }
+  const force = Boolean(req.body && req.body.force);
+  try {
+    const data = await buildAiData(req.user.id, req.user);
+    if (data.transactionCount === 0) {
+      return res.json({
+        configured: true,
+        cached: false,
+        result: {
+          summary: 'You don\'t have any transactions yet, so there\'s nothing to analyze. Add an income and start tracking expenses, then come back for a personalized read.',
+          insights: [],
+          recommendations: ['Add your first income so your money has a plan.', 'Track your expenses so patterns can show up.'],
+        },
+      });
+    }
+    const fingerprint = crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex');
+    const cacheKey = `${req.user.id}:${fingerprint}`;
+    if (!force) {
+      const cached = AI_CACHE.get(cacheKey);
+      if (cached && cached.expires > Date.now()) {
+        return res.json({ configured: true, cached: true, result: cached.result, fingerprint });
+      }
+    }
+    const result = await callLLM(data);
+    aiCacheSet(cacheKey, result);
+    res.json({ configured: true, cached: false, result, fingerprint });
+  } catch (err) {
+    console.error('AI insights error:', err.message);
+    res.status(502).json({ error: 'Could not generate AI insights right now. Please try again.' });
+  }
+});
+
 app.use((req, res) => {
   res.status(404).json({ error: 'not found' });
 });
